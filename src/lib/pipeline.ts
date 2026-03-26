@@ -15,6 +15,7 @@ export type Stage =
   | "needs-plan"
   | "needs-tasks"
   | "in-progress"
+  | "needs-reflection"
   | "needs-graduation"
   | "complete";
 
@@ -45,7 +46,7 @@ export async function detectPipeline(cwd: string): Promise<PipelineState> {
   const features: FeatureState[] = [];
 
   for (const plan of plans) {
-    const epic = await queryBeadsEpic(plan.feature);
+    const epic = await queryBeadsEpic(plan.feature, cwd);
     const stage = determineStage(plan, epic);
 
     features.push({
@@ -63,7 +64,7 @@ export async function detectPipeline(cwd: string): Promise<PipelineState> {
 export async function detectFeature(cwd: string, feature: string): Promise<FeatureState> {
   const planDir = join(cwd, "plans", feature);
   const plan = readFeaturePlan(planDir, feature);
-  const epic = await queryBeadsEpic(feature);
+  const epic = await queryBeadsEpic(feature, cwd);
   const stage = determineStage(plan, epic);
 
   return {
@@ -83,6 +84,7 @@ function determineStage(plan: PlanInfo, epic: EpicInfo | null): Stage {
 
   if (plan.status === "completed") return "complete";
 
+  if (epic.allClosed && !plan.hasReflections) return "needs-reflection";
   if (epic.allClosed) return "needs-graduation";
   return "in-progress";
 }
@@ -101,6 +103,8 @@ function suggestAction(feature: string, stage: Stage): string {
       return `forge tasks ${feature}`;
     case "in-progress":
       return `bd ready`;
+    case "needs-reflection":
+      return `Write plans/${feature}/reflections.md`;
     case "needs-graduation":
       return `forge docs --ship ${feature}`;
     case "complete":

@@ -16,10 +16,10 @@ Orchestrate the full post-PRD pipeline: plan → tasks → implement → docs �
 
 1. **Ensure plan exists.** If no `plans/<feature>/plan.md`, run the `/forge:plan` process. No human input needed — the PRD has the answers.
 2. **Ensure beads DAG exists.** If no beads epic for this feature, run the `/forge:tasks` process.
-3. **Decide PR strategy.** Read the plan and count phases:
-   - Count phases with ≥3 tasks as "large"
-   - If >3 large phases → **phase PRs** (one PR per phase, allows human review between phases)
-   - Otherwise → **single PR** (one branch, one PR at the end)
+3. **Read execution strategy.** Parse the `execution` field from `plans/<feature>/plan.md` frontmatter:
+   - `phase-prs` → **phase PRs** (one PR per phase, stop after each for human review before continuing)
+   - `single-pr` → **single PR** (one branch, one PR at the end)
+   - If the field is missing, default to `single-pr`.
 4. **Create feature branch.** `git checkout -b feat/<feature>` from main/master.
 
 ### Phase 1-N: Execute Each Plan Phase
@@ -41,7 +41,38 @@ while bd ready returns tasks for this phase's epic:
     5. Repeat
 ```
 
-#### Step 2: Graduate docs for this phase (mandatory)
+#### Step 2: Reflect on the phase (mandatory)
+
+After all tasks in a phase are closed, pause and write reflections **before** graduating docs. Append to `plans/<feature>/reflections.md`.
+
+If the file doesn't exist yet, create it with this structure:
+
+```markdown
+# Reflections: <feature>
+
+Append-only log of learnings discovered during implementation.
+
+## Phase <N>: <phase name>
+- <learning>
+```
+
+For each completed phase, review the closed beads and ask:
+
+1. **Platform gotchas** — did anything behave unexpectedly? Runtime quirks, API surprises, tooling friction?
+2. **Debugging discoveries** — what was hard to diagnose? What would have saved time?
+3. **Validated patterns** — what approach worked well and should be reused?
+4. **Process improvements** — what would you do differently next time?
+
+If a phase was straightforward and produced no surprises, a single line is fine:
+
+```markdown
+## Phase 1: core data model
+- Clean phase, no surprises.
+```
+
+The point is to force the pause and look back — not to generate volume.
+
+#### Step 3: Graduate docs for this phase (mandatory)
 
 This is NOT optional. Run the phase-complete workflow from [docs-process.md](docs-process.md) before moving to the next phase or creating a PR.
 
@@ -56,15 +87,16 @@ Checklist — confirm each before proceeding:
 
 If none apply, that's fine — but you must check.
 
-#### Step 3: Phase PR (if phase-PR mode)
+#### Step 4: Phase PR (if phase-PR mode)
 
 Push, create PR, stop and notify user for review. Don't start next phase until merged.
 
 ### Final: Ship
 
-1. **Run full docs graduation (mandatory)** — `/forge:docs --ship <feature>`. Do NOT skip this.
-2. **Create final PR** (if single-PR mode)
-3. **Notify the human** that the feature is ready for review.
+1. **Ensure reflections exist** — `plans/<feature>/reflections.md` must exist before graduation. If phases were reflected on individually, review and add any final cross-cutting learnings.
+2. **Run full docs graduation (mandatory)** — `/forge:docs --ship <feature>`. Do NOT skip this.
+3. **Create final PR** (if single-PR mode)
+4. **Notify the human** that the feature is ready for review.
 
 ---
 
@@ -106,6 +138,9 @@ You are implementing a single task for the <feature> feature.
    - Run tests after each individual change to confirm still green
 5. Commit your changes (see commit rule below)
 6. Do NOT modify files outside the scope of this task
+7. If you hit anything surprising (platform gotcha, unexpected behavior,
+   a pattern that worked well), append a bullet to
+   plans/<feature>/reflections.md before committing. One line is enough.
 
 See tdd.md for the full protocol.
 

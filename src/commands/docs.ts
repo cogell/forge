@@ -112,17 +112,29 @@ async function buildReport(
           ok: hasPlan,
         });
       }
+
+      if (hasPlan) {
+        const hasReflections = existsSync(join(planDir, "reflections.md"));
+        completeness.push({
+          check: `plans/${entry.name}/ has reflections.md`,
+          ok: hasReflections,
+          detail: hasReflections
+            ? "exists"
+            : "missing — write reflections before graduation",
+        });
+      }
     }
   }
 
   if (mode === "ship" && feature) {
     const planDir = join(plansDir, feature);
+    const hasReflections = existsSync(join(planDir, "reflections.md"));
     completeness.push({
-      check: `plans/${feature}/reflections.md reviewed`,
-      ok: existsSync(join(planDir, "reflections.md")),
-      detail: existsSync(join(planDir, "reflections.md"))
+      check: `plans/${feature}/reflections.md reviewed for graduation`,
+      ok: hasReflections,
+      detail: hasReflections
         ? "exists — review for graduation"
-        : "missing — create if there are learnings",
+        : "missing — required before ship",
     });
   }
 

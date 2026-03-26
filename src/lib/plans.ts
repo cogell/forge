@@ -11,6 +11,7 @@ export interface PlanInfo {
   hasBrainstorm: boolean;
   hasPrd: boolean;
   hasPlan: boolean;
+  hasReflections: boolean;
   status: string;
   planDir: string;
 }
@@ -22,6 +23,7 @@ export function readFeaturePlan(planDir: string, feature: string): PlanInfo {
   const hasBrainstorm = existsSync(join(planDir, "brainstorm.md"));
   const hasPrd = existsSync(join(planDir, "prd.md"));
   const hasPlan = existsSync(join(planDir, "plan.md"));
+  const hasReflections = existsSync(join(planDir, "reflections.md"));
 
   let status = "unknown";
   if (hasPrd) {
@@ -34,7 +36,7 @@ export function readFeaturePlan(planDir: string, feature: string): PlanInfo {
     }
   }
 
-  return { feature, hasBrainstorm, hasPrd, hasPlan, status, planDir };
+  return { feature, hasBrainstorm, hasPrd, hasPlan, hasReflections, status, planDir };
 }
 
 /**

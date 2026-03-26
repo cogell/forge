@@ -5,6 +5,7 @@
 
 import type { FeatureState, PipelineState, Stage } from "./pipeline";
 import type { ReadyTask } from "./beads";
+import type { ProjectState } from "../commands/global";
 
 // ── ANSI helpers ──────────────────────────────────────────
 
@@ -27,6 +28,8 @@ function stageColor(stage: Stage): string {
       return c.green;
     case "in-progress":
       return c.cyan;
+    case "needs-reflection":
+      return c.magenta;
     case "needs-graduation":
       return c.magenta;
     case "needs-tasks":
@@ -61,6 +64,7 @@ const STAGE_LABELS: Record<Stage, string> = {
   "needs-plan": "Needs plan",
   "needs-tasks": "Needs tasks",
   "in-progress": "In progress",
+  "needs-reflection": "Needs reflection",
   "needs-graduation": "Needs graduation",
   complete: "Complete",
 };
@@ -176,6 +180,71 @@ export function formatFeatureStatus(
     lines.push(
       `${c.dim}Next:${c.reset} ${c.bold}${state.nextAction}${c.reset}`
     );
+  }
+
+  return lines.join("\n");
+}
+
+// ── Global status (all projects) ─────────────────────────
+
+export function formatGlobalStatus(
+  projects: ProjectState[],
+  root: string,
+  json: boolean
+): string {
+  if (json) return JSON.stringify({ root, projects }, null, 2);
+
+  const totalProjects = projects.length;
+  const totalFeatures = projects.reduce(
+    (sum, p) => sum + p.pipeline.features.length,
+    0
+  );
+
+  const lines: string[] = [
+    `${c.bold}forge global${c.reset} ${c.dim}\u00b7${c.reset} ${totalProjects} project${totalProjects !== 1 ? "s" : ""}, ${totalFeatures} feature${totalFeatures !== 1 ? "s" : ""}`,
+    `${c.dim}${root}${c.reset}`,
+    "",
+  ];
+
+  for (const project of projects) {
+    const featureCount = project.pipeline.features.length;
+    const header = `${c.bold}${project.name}${c.reset} ${c.dim}(${featureCount} feature${featureCount !== 1 ? "s" : ""})${c.reset}`;
+    lines.push(header);
+
+    if (featureCount === 0) {
+      lines.push(`  ${c.dim}No features in plans/${c.reset}`);
+    } else {
+      const nameWidth = Math.max(
+        ...project.pipeline.features.map((f) => f.feature.length),
+        12
+      );
+
+      for (const f of project.pipeline.features) {
+        lines.push(formatFeatureLine(f, nameWidth));
+      }
+    }
+
+    lines.push("");
+  }
+
+  // Aggregate summary
+  const stageCounts: Partial<Record<Stage, number>> = {};
+  for (const p of projects) {
+    for (const f of p.pipeline.features) {
+      stageCounts[f.stage] = (stageCounts[f.stage] || 0) + 1;
+    }
+  }
+
+  if (totalFeatures > 0) {
+    const summary = Object.entries(stageCounts)
+      .map(([stage, count]) => {
+        const sc = stageColor(stage as Stage);
+        return `${sc}${count} ${STAGE_LABELS[stage as Stage].toLowerCase()}${c.reset}`;
+      })
+      .join(`${c.dim}, ${c.reset}`);
+
+    lines.push(`${c.dim}\u2500\u2500\u2500${c.reset}`);
+    lines.push(summary);
   }
 
   return lines.join("\n");
