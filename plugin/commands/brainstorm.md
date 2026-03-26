@@ -52,4 +52,4 @@ When the brainstorm feels complete, suggest running `/forge:prd <feature>` to fo
 
 ## Deep Reference
 
-See [brainstorm-process.md](../guidance/brainstorm-process.md) for the full process protocol.
+See [brainstorm-process.md](../../guidance/brainstorm-process.md) for the full process protocol.

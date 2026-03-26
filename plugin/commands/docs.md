@@ -51,4 +51,4 @@ Run when entire PRD/plan is complete. Full graduation:
 
 ## Deep Reference
 
-See [docs-process.md](../guidance/docs-process.md) for the full health check checklist, Diataxis compliance checks, and pruning guidelines.
+See [docs-process.md](../../guidance/docs-process.md) for the full health check checklist, Diataxis compliance checks, and pruning guidelines.

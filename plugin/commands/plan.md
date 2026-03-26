@@ -57,4 +57,4 @@ Save to `plans/<feature>/plan.md`. Each phase gets: title, covered user stories,
 
 ## Deep Reference
 
-See [plan-process.md](../guidance/plan-process.md) for the full vertical slicing protocol.
+See [plan-process.md](../../guidance/plan-process.md) for the full vertical slicing protocol.

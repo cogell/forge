@@ -69,4 +69,4 @@ When tasks span layers (API → daemon → CLI), the `design` field of each task
 
 ## Deep Reference
 
-See [tasks-process.md](../guidance/tasks-process.md) for the full decomposition protocol, complexity scoring formula, and structured content field reference.
+See [tasks-process.md](../../guidance/tasks-process.md) for the full decomposition protocol, complexity scoring formula, and structured content field reference.

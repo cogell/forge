@@ -63,4 +63,4 @@ Write to `plans/<feature>/prd.md` with sections:
 
 ## Deep Reference
 
-See [prd-process.md](../guidance/prd-process.md) for the full interview protocol and writing rules.
+See [prd-process.md](../../guidance/prd-process.md) for the full interview protocol and writing rules.

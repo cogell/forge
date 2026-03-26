@@ -64,7 +64,7 @@ Push, create PR, stop and notify user for review. Don't start next phase until m
 
 ## Task Agent
 
-Each task agent receives: bead title, description (WHAT), design (HOW), acceptance criteria, and notes. Agent works in a worktree using the **TDD cycle** (RED → GREEN → REFACTOR per [tdd.md](../guidance/tdd.md)):
+Each task agent receives: bead title, description (WHAT), design (HOW), acceptance criteria, and notes. Agent works in a worktree using the **TDD cycle** (RED → GREEN → REFACTOR per [tdd.md](../../guidance/tdd.md)):
 
 1. RED — write failing tests from acceptance criteria
 2. GREEN — minimum implementation to pass tests
@@ -81,7 +81,7 @@ Output: `PASS` or `FAIL` with specific issues. On FAIL, a **fix agent** addresse
 
 ## Salvage Agent
 
-On task failure, a salvage agent uses the **systematic debugging protocol** ([debugging.md](../guidance/debugging.md)):
+On task failure, a salvage agent uses the **systematic debugging protocol** ([debugging.md](../../guidance/debugging.md)):
 1. Classify the failure type
 2. Judge if previous agent was directionally correct or wrong
 3. Reproduce before fixing
@@ -95,4 +95,4 @@ The beads DAG is the source of truth. Run `/forge:run <feature>` again after any
 
 ## Deep Reference
 
-See [run-process.md](../guidance/run-process.md) for the full orchestration protocol including agent prompt templates, review loop details, and salvage agent instructions.
+See [run-process.md](../../guidance/run-process.md) for the full orchestration protocol including agent prompt templates, review loop details, and salvage agent instructions.

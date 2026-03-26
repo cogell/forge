@@ -33,13 +33,14 @@ forge --help
 
 ### Claude Plugin
 
-Register forge as a local Claude Code plugin:
+Register forge as a local Claude Code plugin (two steps):
 
 ```bash
-claude plugin add /path/to/forge
+claude plugin marketplace add /path/to/forge   # register as local marketplace
+claude plugin install forge                     # install the plugin
 ```
 
-This gives you `/forge:brainstorm`, `/forge:prd`, `/forge:plan`, `/forge:tasks`, `/forge:run`, `/forge:docs`, `/forge:status`, and `/forge:init` as slash commands.
+Restart Claude Code after installing. This gives you `/forge:brainstorm`, `/forge:prd`, `/forge:plan`, `/forge:tasks`, `/forge:run`, `/forge:docs`, `/forge:status`, and `/forge:init` as slash commands.
 
 On session start, the plugin runs `forge status --json` to inject pipeline context automatically.
 
@@ -89,7 +90,9 @@ forge status --json               # machine-readable
 ```
 forge/
 ├── src/                 # Bun CLI — state machine, filesystem + beads queries
-├── commands/            # Claude Plugin commands — agent-facing instructions
+├── plugin/              # Claude Plugin (marketplace installable)
+│   ├── .claude-plugin/  #   plugin manifest
+│   └── commands/        #   agent-facing /forge:* slash commands
 ├── guidance/            # Deep process docs — referenced by commands
 └── skills/forge/        # Skillshare skill — for non-plugin AI tools
 ```
