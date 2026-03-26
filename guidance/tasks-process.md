@@ -94,6 +94,30 @@ Checks for: correct direction, orphans, cycles, disconnected subgraphs. Reports 
 
 When tasks span layers (e.g., API → daemon → CLI), the `design` field of each task MUST use identical names for shared contracts: query param names, field names, type names, endpoint paths. If the API task says `document_id`, the daemon and CLI tasks must also say `document_id` — not `noteId` or `docId`. Name drift between tasks causes silent bugs that pass type-checking but break at runtime.
 
+### System boundary validation
+
+When a task consumes data from outside the process (WebSocket messages, API responses, file reads, IPC), the acceptance criteria MUST include a malformed-input case. The design field MUST specify what happens on invalid data — log and ignore, fallback to default, surface an error, etc. If the plan identified a system boundary (Step 4), the corresponding task inherits this requirement.
+
+### Test companions for branching logic
+
+In-task TDD (RED → GREEN → REFACTOR) covers most work. But when a task introduces complex conditional logic — multiple branches, state machines, lifecycle transitions — the in-task tests may stay shallow because the implementer is focused on making it work, not on edge coverage.
+
+Create a **sibling test task** when:
+
+- The logic has ≥3 distinct branches or state transitions
+- The logic can't be tested through a single public API (e.g., engine internals that are only exercised through orchestration)
+- The task introduces a new naming/numbering scheme (visit counts, suffixes, ID formats)
+
+The test task depends on the implementation task and blocks downstream work. Its acceptance criteria name specific cases:
+
+```
+--acceptance "- [ ] session created for shell/task nodes
+- [ ] session NOT created for start/exit/conditional/human
+- [ ] visit-count naming produces -2, -3 suffixes on loop-back
+- [ ] failed handler marks session as crashed
+- [ ] createNodeSession failure does not block handler execution"
+```
+
 ## Priority Reference
 
 | Priority | Value | When |

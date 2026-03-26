@@ -162,6 +162,18 @@ while attempt <= 2:
         if attempt == 2 → label needs-human, skip task, exit loop
 ```
 
+### Pre-review: automated quality checks
+
+Before spawning the review agent, run the project's linter and type checker in the worktree:
+
+```bash
+# Example — adapt to project tooling
+<lint command>       # e.g., pnpm lint
+<typecheck command>  # e.g., pnpm tsc --noEmit
+```
+
+If either fails, spawn a fix agent with the lint/type errors before proceeding to review. Do not send a review agent a diff that doesn't pass automated checks — human-readable review time is too valuable for issues a machine can catch.
+
 ### Review Agent
 
 Receives the bead's full content plus the diff of the worktree branch.
@@ -199,6 +211,8 @@ Check each item. Flag any failure with a specific, concrete description.
 - No code written for cases not covered by the current tests
 - New patterns are consistent with what is visible in the diff context
 - Tests assert behavior, not implementation details
+- No repeated I/O inside loops — prefer batch/bulk operations when operating on a collection of items
+- Data from external sources (WebSocket, API responses, IPC) is validated before use — unknown/malformed input has a defined handling path
 
 ## Output format
 First line must be exactly PASS or FAIL.

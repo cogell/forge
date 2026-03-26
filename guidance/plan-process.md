@@ -30,7 +30,13 @@ Before slicing, identify high-level decisions unlikely to change during implemen
 
 These go in the plan header so every phase can reference them.
 
-### Step 4: Draft vertical slices
+### Step 4: Audit interfaces and system boundaries
+
+**Interface fitness:** For each existing type, interface, or schema this feature will extend or modify, check whether the current design cleanly supports the extension. If the extension requires workarounds (e.g., type casts, adapter layers, monkey-patching), add a prep task in Phase 1 to fix the interface first. Workarounds in the plan become tech debt in the code.
+
+**System boundaries:** List every point where data will cross a trust boundary — WebSocket messages, API responses, IPC, user input, file reads from external sources. For each boundary, document what happens when the data is malformed. These become acceptance criteria on the consuming task. If the plan doesn't say what happens on bad input, the implementation won't handle it either.
+
+### Step 5: Draft vertical slices
 
 Break the PRD into **tracer bullet** phases. Each phase is a thin vertical slice through ALL layers.
 
@@ -49,7 +55,7 @@ Break the PRD into **tracer bullet** phases. Each phase is a thin vertical slice
 - Infrastructure/setup tasks are part of Phase 1, not a separate "Phase 0"
 - If a phase has no user-visible behavior, it's probably a horizontal slice — reconsider
 
-### Step 5: Quiz the user
+### Step 6: Quiz the user
 
 Present the proposed breakdown as a numbered list. For each phase show:
 
@@ -64,7 +70,7 @@ Ask:
 
 Iterate until approved.
 
-### Step 6: Write the plan
+### Step 7: Write the plan
 
 Create the plan using the template from [templates.md](templates.md). Save to `plans/<feature>/plan.md`.
 
