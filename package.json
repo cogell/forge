@@ -1,0 +1,21 @@
+{
+  "name": "forge-cli",
+  "version": "0.1.0",
+  "description": "Feature pipeline CLI: PRD → Plan → Tasks → Code → Docs",
+  "type": "module",
+  "bin": {
+    "forge": "./bin/forge"
+  },
+  "scripts": {
+    "build": "bun build src/index.ts --outfile bin/forge --target bun",
+    "dev": "bun run src/index.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "latest",
+    "@types/bun": "latest"
+  },
+  "dependencies": {
+    "gray-matter": "latest"
+  }
+}

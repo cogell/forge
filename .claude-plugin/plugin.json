@@ -1,0 +1,30 @@
+{
+  "name": "forge",
+  "description": "Feature pipeline: Brainstorm → PRD → Plan → Tasks → Code → Docs. Ship features through a structured, repeatable process.",
+  "version": "0.1.0",
+  "author": {
+    "name": "Cedric",
+    "url": "https://github.com/cogell"
+  },
+  "license": "MIT",
+  "keywords": [
+    "pipeline",
+    "prd",
+    "planning",
+    "feature-development",
+    "documentation"
+  ],
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "forge status --json 2>/dev/null || true"
+          }
+        ]
+      }
+    ]
+  }
+}
