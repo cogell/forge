@@ -1,6 +1,6 @@
 ---
 description: Documentation lifecycle — health check, phase graduation, or full ship graduation
-argument-hint: [--phase|--ship] [feature-name]
+argument-hint: "[--phase|--ship] [feature-name]"
 ---
 
 Run `forge docs $ARGUMENTS` to get a structured report.
