@@ -72,7 +72,7 @@ Write to `plans/<feature>/prd.md` with sections:
 
 ### Step 7: Review gate
 
-Before advancing to `/forge:plan`, run the review gate per [review-gates.md](../../guidance/review-gates.md). Minimum 1 independent review pass (fresh context, full tools). No critical or major issues may remain.
+Before advancing to `/forge:plan`, run the review gate per [review-gates.md](../../guidance/review-gates.md). Each review pass uses a fresh context with full tools. Advance when a pass surfaces no critical or major issues.
 
 ## Deep Reference
 

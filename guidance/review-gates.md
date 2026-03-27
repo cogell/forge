@@ -175,18 +175,14 @@ You have full codebase access. Do not rewrite — only identify issues.
 Same as PRD review: <severity>: <description>, end with PASS or FAIL.
 ```
 
-## Minimum review passes
+## When to stop reviewing
 
-These are minimums, not targets. Continue until clean.
+There is no fixed pass count. A review is **done** when the latest pass surfaces no critical or major issues. That might be the first pass or the fifth — it depends on the artifact's complexity and how clean it comes out of authoring.
 
-| Artifact | Minimum passes | Rationale |
-|----------|---------------|-----------|
-| PRD | 1 | PRD is authored interactively with the user — the interview process is itself a form of review. One independent review catches what the interview missed. |
-| Plan | 3 | Plan is the first technical artifact. Errors here cascade into tasks and code. Multiple passes catch structural issues that a single reviewer normalizes away. |
-| Tasks | 3 | Task specs are the direct input to the implementing agent. Ambiguity here causes wrong code. Multiple passes catch cross-task inconsistencies. |
+Use judgment: a small, well-scoped feature may pass on the first review. A complex plan touching many modules may need several rounds. The signal is always the same — a clean pass means advance.
 
 ## Why fresh context windows?
 
 The authoring agent has spent its context building the artifact. It has normalized its own assumptions and can no longer see its blind spots. A fresh context window with no carryover from the authoring session is the cheapest way to get independent judgment.
 
-Each review pass should be a separate agent invocation — not a follow-up message in the same conversation.
+Each review pass should be a separate agent invocation — not a follow-up message in the same conversation. Review passes run **sequentially**, not in parallel — each pass must complete and any fixes must land before the next pass begins.

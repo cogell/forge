@@ -36,7 +36,6 @@ function stageColor(stage: Stage): string {
     case "needs-plan":
     case "needs-prd":
       return c.yellow;
-    case "needs-brainstorm":
     case "no-project":
       return c.dim;
   }
@@ -59,7 +58,6 @@ function progressBar(done: number, total: number, width = 10): string {
 
 const STAGE_LABELS: Record<Stage, string> = {
   "no-project": "No project",
-  "needs-brainstorm": "Needs brainstorm",
   "needs-prd": "Needs PRD",
   "needs-plan": "Needs plan",
   "needs-tasks": "Needs tasks",
@@ -90,7 +88,7 @@ export function formatPipelineStatus(
     return [
       `${c.dim}Project initialized but no features found in plans/.${c.reset}`,
       "",
-      `Run: ${c.bold}forge brainstorm <feature-name>${c.reset}`,
+      `Run: ${c.bold}forge prd <feature-name>${c.reset}`,
     ].join("\n");
   }
 

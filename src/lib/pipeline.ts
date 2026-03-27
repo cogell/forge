@@ -10,7 +10,6 @@ import { queryBeadsEpic, type EpicInfo } from "./beads";
 
 export type Stage =
   | "no-project"     // No plans/ or docs/ dirs
-  | "needs-brainstorm"
   | "needs-prd"
   | "needs-plan"
   | "needs-tasks"
@@ -77,8 +76,7 @@ export async function detectFeature(cwd: string, feature: string): Promise<Featu
 }
 
 function determineStage(plan: PlanInfo, epic: EpicInfo | null): Stage {
-  if (!plan.hasBrainstorm && !plan.hasPrd) return "needs-brainstorm";
-  if (plan.hasBrainstorm && !plan.hasPrd) return "needs-prd";
+  if (!plan.hasPrd) return "needs-prd";
   if (!plan.hasPlan) return "needs-plan";
   if (!epic) return "needs-tasks";
 
@@ -93,8 +91,6 @@ function suggestAction(feature: string, stage: Stage): string {
   switch (stage) {
     case "no-project":
       return "forge init";
-    case "needs-brainstorm":
-      return `forge brainstorm ${feature}`;
     case "needs-prd":
       return `forge prd ${feature}`;
     case "needs-plan":

@@ -72,7 +72,7 @@ Save to `plans/<feature>/plan.md`. Each phase gets: title, covered user stories,
 
 ### Step 8: Review gate
 
-Before advancing to `/forge:tasks`, run the review gate per [review-gates.md](../../guidance/review-gates.md). Minimum 3 independent review passes (each a fresh context, full tools). No critical or major issues may remain. The plan is the first technical artifact — errors here cascade into every downstream step.
+Before advancing to `/forge:tasks`, run the review gate per [review-gates.md](../../guidance/review-gates.md). Each review pass uses a fresh context with full tools. Advance when a pass surfaces no critical or major issues — that might be the first pass or the fifth, depending on complexity.
 
 ## Deep Reference
 

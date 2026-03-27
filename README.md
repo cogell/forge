@@ -1,8 +1,15 @@
 # Forge
 
-Feature pipeline CLI + Claude Plugin: **Brainstorm → PRD → Plan → Tasks → Code → Reflect → Review → Docs**.
+Feature pipeline CLI + Claude Plugin: **PRD → Plan → Tasks → Code → Reflect → Review → Docs**.
 
 Forge gives you a structured, repeatable process for shipping features. The CLI handles state detection (where is this feature in the pipeline?), and the plugin commands give AI agents the process knowledge to execute each step.
+
+The pipeline has two thinking modes:
+
+- **Divergent** (`forge brainstorm`) — explore the problem space, generate options, surface unknowns. Optional. Use when the problem is ambiguous, there are multiple viable approaches, or the stakes warrant exploration.
+- **Convergent** (`forge prd`) — decide and specify. The default entry point. Narrows options into decisions, user stories, and module sketches.
+
+Most features enter at `forge prd`. Run `forge brainstorm` first when you need to explore before committing to a direction.
 
 ## Install
 
@@ -62,12 +69,15 @@ This makes the skill available to any target that doesn't support the Claude Plu
 ```bash
 cd your-project
 forge init                        # create plans/ and docs/ structure
-forge brainstorm my-feature       # explore the problem space
-forge prd my-feature              # interview → write PRD (1+ review pass)
-forge plan my-feature             # slice into phased plan (3+ review passes)
-forge tasks my-feature            # decompose into beads DAG (3+ review passes)
+forge prd my-feature              # interview → write PRD + review gate
+forge plan my-feature             # slice into phased plan + review gate
+forge tasks my-feature            # decompose into beads DAG + review gate
 bd ready                          # start executing tasks
 forge docs --ship my-feature      # graduate docs after shipping
+
+# Optional: brainstorm first when the problem space is ambiguous
+forge brainstorm my-feature       # divergent exploration before PRD
+forge prd my-feature              # PRD will use brainstorm as input
 ```
 
 ### Autopilot
@@ -112,7 +122,6 @@ forge/
 | Stage | Next action |
 |-------|-------------|
 | No project | `forge init` |
-| Needs brainstorm | `forge brainstorm <feature>` |
 | Needs PRD | `forge prd <feature>` |
 | Needs plan | `forge plan <feature>` |
 | Needs tasks | `forge tasks <feature>` |
@@ -120,6 +129,8 @@ forge/
 | Needs reflection | `forge reflect <feature>` |
 | Needs graduation | `forge docs --ship <feature>` |
 | Complete | — |
+
+`forge brainstorm <feature>` is not a pipeline stage — it's an optional divergent exploration step you can run before `forge prd` when the problem space is ambiguous.
 
 `forge retro <feature>` is not a pipeline stage — it's triggered when a reviewer finds issues on a "ready" PR. See `guidance/retro-process.md`.
 
