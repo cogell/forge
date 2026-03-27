@@ -23,10 +23,17 @@ Orchestrate the full post-PRD pipeline: plan → tasks → implement → docs �
    - `single-pr` → **single PR** (one branch, one PR at the end)
    - If the field is missing, default to `single-pr`.
 4. **Create feature branch.** `git checkout -b feat/<feature>` from main/master.
+5. **Commit plan artifacts to the feature branch.** Stage and commit `plans/<feature>/` immediately so plan files are tracked on the branch before any task agents are spawned. Untracked plans get lost when worktrees branch — they won't be visible to task agents and may require manual recovery.
+   ```bash
+   git add plans/<feature>/
+   git commit -m "docs(<feature>): add PRD and implementation plan"
+   ```
 
 ### Phase 1-N: Execute Each Plan Phase
 
 #### Step 1: Execute the task loop
+
+**Before each task agent spawn**, ensure the worktree branches from the **current feature branch HEAD** — not a stale point. Prior tasks' merges must be visible to subsequent agents. If tasks are run sequentially, this happens naturally. If worktrees were pre-created, rebase or recreate them from the latest HEAD before spawning.
 
 ```
 while bd ready returns tasks for this phase's epic:
@@ -150,9 +157,12 @@ You are implementing a single task for the <feature> feature.
    - Run the full test suite (not just the new tests) before proceeding
 4. REFACTOR — clean up without changing behavior
    - Run tests after each individual change to confirm still green
-5. Commit your changes (see commit rule below)
-6. Do NOT modify files outside the scope of this task
-7. If you hit anything surprising (platform gotcha, unexpected behavior,
+5. Run the project's automated checks (linter, type checker, etc.)
+   - Fix any issues before committing — don't leave them for the review loop
+   - e.g., <lint command>, <typecheck command>
+6. Commit your changes (see commit rule below)
+7. Do NOT modify files outside the scope of this task
+8. If you hit anything surprising (platform gotcha, unexpected behavior,
    a pattern that worked well), append a bullet to
    plans/<feature>/reflections.md before committing. One line is enough.
 
