@@ -59,7 +59,23 @@ Direction: first arg is **blocked by** second arg.
 
 **Scoring formula:** Count files touched (+1 each) + non-trivial logic (+2) + unknowns (+2) + coordination (+1) + new library (+1).
 
-### Step 5: Expand complex tasks (7+)
+### Step 5: Collapse coupled tasks
+
+After scoring, check whether any set of tasks shares a **breaking change** — a type rename, interface restructure, or schema migration that cannot be merged incrementally without breaking consumers.
+
+**Collapse heuristic:** If the tasks sharing a breaking change touch **≤10 files total** AND their combined complexity is **≤15**, collapse them into a single task. The "additive merge" principle from Step 2 cannot hold for these changes — renaming `Space` to `Spaces` across 7 files is one atomic operation, not three independent tasks.
+
+**Why:** Worktree agents that see TypeScript errors from incomplete renames in other files will scope-creep, attempting fixes outside their task boundary. A single task avoids this entirely.
+
+**Signs that tasks should be collapsed:**
+
+- A type, interface, or enum is renamed and multiple tasks consume it
+- A function signature changes and callers span several tasks
+- A database column rename requires coordinated migration + code changes
+
+When collapsing, sum the file lists from each task's `notes` field into one task, merge acceptance criteria, and pick the highest priority among the collapsed tasks.
+
+### Step 6: Expand complex tasks (7+)
 
 Tasks scoring 7+ become mini-epics with children:
 
@@ -73,7 +89,7 @@ bd create "Sub-task title" -t task -p 1 \
 
 Update downstream dependencies to point at specific children, not the parent. Each child should score ≤6. Max nesting: 3 levels.
 
-### Step 6: Validate the DAG
+### Step 7: Validate the DAG
 
 ```bash
 bd swarm validate <epic-id>

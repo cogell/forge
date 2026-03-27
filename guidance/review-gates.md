@@ -208,6 +208,10 @@ You have full codebase access. Do not rewrite — only identify issues.
 - No task scores above 6 without being decomposed into sub-tasks
 - Each sub-task is independently testable and mergeable
 
+### Collapse check
+- Tasks sharing a breaking type/interface change (rename, signature change, schema migration) with combined complexity ≤15 and ≤10 files should be a single task, not a multi-task DAG
+- No task DAG where merging any single task would break existing functionality due to a shared rename or interface change — this violates the additive-merge principle and causes worktree agent scope-creep
+
 ## Output format
 Same as PRD review: <severity>: <description>, end with PASS or FAIL.
 ```
