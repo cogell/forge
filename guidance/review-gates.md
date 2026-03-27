@@ -4,6 +4,18 @@ Every artifact must pass review before the pipeline advances. Reviews are run in
 
 ## The protocol
 
+### Self-review (before external review)
+
+The authoring agent runs this checklist itself — not a subagent dispatch:
+
+1. **Source coverage** — skim each requirement in the source material. Can you point to a section/task that addresses it? List any gaps.
+2. **Placeholder scan** — search the artifact for red flags from the placeholder list below. Fix them inline.
+3. **Name consistency** — do types, method signatures, field names, and file paths used in later sections match what was defined in earlier sections? A function called `clearLayers()` in Phase 1 but `clearFullLayers()` in Phase 3 is a bug.
+
+Fix issues inline. If you find a requirement with no coverage, add it. Then proceed to external review.
+
+### External review
+
 ```
 pass = 0
 repeat:
@@ -35,6 +47,17 @@ The review agent always gets:
 2. **The source material** it was derived from (brainstorm → PRD, PRD → plan, plan → tasks)
 3. **Codebase access** — full tool access to read files, grep, explore
 
+## Placeholder scan (all artifacts)
+
+Every review pass checks for placeholder content. These are **always major or critical** — they force the implementing agent to guess:
+
+- "TBD", "TODO", "to be decided", "implement later", "fill in details"
+- "Add appropriate error handling" / "add validation" / "handle edge cases" — without specifying which errors, what validation, or what edge cases
+- "Write tests for the above" — without actual test criteria or cases
+- "Similar to Task N" — repeat the content; the implementer may read tasks out of order
+- Steps that describe what to do without showing how — code/command steps need code/commands
+- References to types, functions, or interfaces not defined in any task or existing code
+
 ## Stage-specific review criteria
 
 ### PRD review
@@ -53,9 +76,14 @@ codebase access. Do not rewrite — only identify issues.
 
 ## Check each item. Classify every issue as critical, major, or minor.
 
+### Placeholder scan
+- No TBD, TODO, "to be decided", "implement later", or vague directives
+- No "add appropriate error handling" without specifying which errors and how
+- No references to types/functions not defined in any task or existing code
+
 ### Completeness
 - Every user story covers both happy path and error/edge cases
-- Implementation decisions resolve all design branches — no "TBD" or "to be decided"
+- Implementation decisions resolve all design branches
 - Out of scope is explicit — no obvious adjacent features left unaddressed
 - Testing decisions specify what to test and how, not just "write tests"
 
@@ -97,6 +125,10 @@ codebase access. Do not rewrite — only identify issues.
 <contents of plans/<feature>/prd.md>
 
 ## Check each item. Classify every issue as critical, major, or minor.
+
+### Placeholder scan
+- No TBD, TODO, vague directives, or "similar to Phase N"
+- Acceptance criteria are specific and testable — not "works correctly"
 
 ### Coverage
 - Every PRD user story appears in at least one phase
@@ -144,6 +176,11 @@ You have full codebase access. Do not rewrite — only identify issues.
 <contents of plans/<feature>/plan.md — the relevant phase>
 
 ## Check each item. Classify every issue as critical, major, or minor.
+
+### Placeholder scan
+- No TBD, TODO, vague directives, or "similar to Task N"
+- Design fields show actual types/interfaces/code, not descriptions of what to write
+- No references to types or functions not defined in any task or existing code
 
 ### Coverage
 - Every acceptance criterion from the plan phase maps to at least one task

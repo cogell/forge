@@ -30,7 +30,17 @@ Before slicing, identify high-level decisions unlikely to change:
 
 These go in the plan header so every phase can reference them.
 
-### Step 4: Draft vertical slices
+### Step 4: Map file structure
+
+Before slicing, map out which files will be created or modified and what each is responsible for. This is where decomposition decisions get locked in:
+
+- Each file should have one clear responsibility
+- Files that change together should live together — split by responsibility, not by technical layer
+- In existing codebases, follow established patterns; if a file has grown unwieldy, including a split is reasonable
+
+This structure informs the vertical slices and feeds directly into task decomposition.
+
+### Step 5: Draft vertical slices
 
 Break the PRD into **tracer bullet** phases. Each phase is a thin vertical slice through ALL layers.
 
@@ -38,8 +48,8 @@ Break the PRD into **tracer bullet** phases. Each phase is a thin vertical slice
 - Each slice delivers a narrow but COMPLETE path through every layer (schema → API → UI → tests)
 - A completed slice is demoable or verifiable on its own
 - Prefer many thin slices over few thick ones
-- DO include durable decisions: route paths, schema shapes, data model names
-- Do NOT include specific file names, function names, or implementation details
+- Include durable decisions: route paths, schema shapes, data model names
+- Include file paths from the file structure map — which files each phase creates or modifies
 
 **Sequencing:**
 - Phase 1 = thinnest possible end-to-end slice — prove the architecture
@@ -53,11 +63,15 @@ Break the PRD into **tracer bullet** phases. Each phase is a thin vertical slice
 - Identify the earliest phase where a user could get real value
 - See [value.md](../../guidance/value.md) for the value-thinking framework
 
-### Step 5: Quiz the user
+### Step 6: Scope check
+
+If the plan spans multiple independent subsystems with no shared interfaces, consider whether it should be separate plans — one per subsystem. Each plan should produce working, testable software on its own. However, a single plan that crosses subsystems is fine when the phases share data models, APIs, or other contracts — the task decomposition (beads DAG) gives enough structure to manage the complexity.
+
+### Step 7: Quiz the user
 
 Present the proposed breakdown. For each phase: title + user stories covered. Ask about granularity, merging/splitting, and sequence. Iterate until approved.
 
-### Step 6: Choose execution strategy
+### Step 8: Choose execution strategy
 
 Ask the user how they want `/forge:run` to execute this plan:
 
@@ -66,13 +80,13 @@ Ask the user how they want `/forge:run` to execute this plan:
 
 Record the choice in the plan frontmatter as `execution: phase-prs` or `execution: single-pr`.
 
-### Step 7: Write the plan
+### Step 9: Write the plan
 
-Save to `plans/<feature>/plan.md`. Each phase gets: title, covered user stories, "what to build" description, and acceptance criteria checkboxes.
+Save to `plans/<feature>/plan.md`. Each phase gets: title, covered user stories, file structure (files created/modified), "what to build" description, and acceptance criteria checkboxes.
 
-### Step 8: Review gate
+### Step 10: Review gate
 
-Before advancing to `/forge:tasks`, run the review gate per [review-gates.md](../../guidance/review-gates.md). Each review pass uses a fresh context with full tools. Advance when a pass surfaces no critical or major issues — that might be the first pass or the fifth, depending on complexity.
+Before advancing to `/forge:tasks`, run the review gate per [review-gates.md](../../guidance/review-gates.md). Run the self-review checklist first, then external review. Each review pass uses a fresh context with full tools. Advance when a pass surfaces no critical or major issues.
 
 ## Deep Reference
 

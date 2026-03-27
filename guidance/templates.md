@@ -86,11 +86,20 @@ execution: phase-prs | single-pr
 
 ## Architectural Decisions
 
+## File Structure
+
+| File | Action | Responsibility |
+|------|--------|---------------|
+| `path/to/file.ts` | create | ... |
+| `path/to/existing.ts` | modify | ... |
+
 ---
 
 ## Phase 1: <Title>
 
 **User stories**:
+
+**Files**: `path/to/file.ts` (create), `path/to/existing.ts` (modify)
 
 ### What to build
 

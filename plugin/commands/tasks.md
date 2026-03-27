@@ -69,7 +69,7 @@ When tasks span layers (API → daemon → CLI), the `design` field of each task
 
 ### Step 6: Review gate
 
-Before advancing to `/forge:run`, run the review gate per [review-gates.md](../../guidance/review-gates.md). Each review pass uses a fresh context with full tools. Advance when a pass surfaces no critical or major issues — that might be the first pass or the fifth, depending on complexity.
+Before advancing to `/forge:run`, run the review gate per [review-gates.md](../../guidance/review-gates.md). Run the self-review checklist first, then external review. Each review pass uses a fresh context with full tools. Advance when a pass surfaces no critical or major issues.
 
 ## Deep Reference
 

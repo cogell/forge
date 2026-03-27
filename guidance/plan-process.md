@@ -36,7 +36,18 @@ These go in the plan header so every phase can reference them.
 
 **System boundaries:** List every point where data will cross a trust boundary — WebSocket messages, API responses, IPC, user input, file reads from external sources. For each boundary, document what happens when the data is malformed. These become acceptance criteria on the consuming task. If the plan doesn't say what happens on bad input, the implementation won't handle it either.
 
-### Step 5: Draft vertical slices
+### Step 5: Map file structure
+
+Before slicing, map out which files will be created or modified and what each is responsible for. This is where decomposition decisions get locked in:
+
+- Each file should have one clear responsibility
+- Files that change together should live together — split by responsibility, not by technical layer
+- In existing codebases, follow established patterns; if a file has grown unwieldy, including a split is reasonable
+- Prefer smaller, focused files over large ones that do too much
+
+This structure informs the vertical slices and feeds directly into task decomposition.
+
+### Step 6: Draft vertical slices
 
 Break the PRD into **tracer bullet** phases. Each phase is a thin vertical slice through ALL layers.
 
@@ -45,8 +56,8 @@ Break the PRD into **tracer bullet** phases. Each phase is a thin vertical slice
 - Each slice delivers a narrow but COMPLETE path through every layer (schema → API → UI → tests)
 - A completed slice is demoable or verifiable on its own
 - Prefer many thin slices over few thick ones
-- DO include durable decisions: route paths, schema shapes, data model names
-- Do NOT include specific file names, function names, or implementation details likely to change as later phases are built
+- Include durable decisions: route paths, schema shapes, data model names
+- Include file paths from the file structure map — which files each phase creates or modifies
 
 **Sequencing principles:**
 
@@ -55,7 +66,11 @@ Break the PRD into **tracer bullet** phases. Each phase is a thin vertical slice
 - Infrastructure/setup tasks are part of Phase 1, not a separate "Phase 0"
 - If a phase has no user-visible behavior, it's probably a horizontal slice — reconsider
 
-### Step 6: Quiz the user
+### Step 7: Scope check
+
+If the plan spans multiple independent subsystems with no shared interfaces, consider whether it should be separate plans — one per subsystem. Each plan should produce working, testable software on its own. However, a single plan that crosses subsystems is fine when the phases share data models, APIs, or other contracts — the task decomposition (beads DAG) gives enough structure to manage the complexity.
+
+### Step 8: Quiz the user
 
 Present the proposed breakdown as a numbered list. For each phase show:
 
@@ -70,12 +85,13 @@ Ask:
 
 Iterate until approved.
 
-### Step 7: Write the plan
+### Step 9: Write the plan
 
 Create the plan using the template from [templates.md](templates.md). Save to `plans/<feature>/plan.md`.
 
 Each phase gets:
 
 - Title and covered user stories
+- File structure — which files are created or modified
 - "What to build" — concise end-to-end behavior description
 - Acceptance criteria — markdown checkboxes
