@@ -1,6 +1,6 @@
 # Forge
 
-Feature pipeline CLI + Claude Plugin: **Brainstorm → PRD → Plan → Tasks → Code → Docs**.
+Feature pipeline CLI + Claude Plugin: **Brainstorm → PRD → Plan → Tasks → Code → Reflect → Review → Docs**.
 
 Forge gives you a structured, repeatable process for shipping features. The CLI handles state detection (where is this feature in the pipeline?), and the plugin commands give AI agents the process knowledge to execute each step.
 
@@ -40,7 +40,7 @@ claude plugin marketplace add /path/to/forge   # register as local marketplace
 claude plugin install forge                     # install the plugin
 ```
 
-Restart Claude Code after installing. This gives you `/forge:brainstorm`, `/forge:prd`, `/forge:plan`, `/forge:tasks`, `/forge:run`, `/forge:docs`, `/forge:status`, and `/forge:init` as slash commands.
+Restart Claude Code after installing. This gives you `/forge:brainstorm`, `/forge:prd`, `/forge:plan`, `/forge:tasks`, `/forge:run`, `/forge:retro`, `/forge:docs`, `/forge:status`, and `/forge:init` as slash commands.
 
 On session start, the plugin runs `forge status --json` to inject pipeline context automatically.
 
@@ -63,9 +63,9 @@ This makes the skill available to any target that doesn't support the Claude Plu
 cd your-project
 forge init                        # create plans/ and docs/ structure
 forge brainstorm my-feature       # explore the problem space
-forge prd my-feature              # interview → write PRD
-forge plan my-feature             # slice into phased implementation plan
-forge tasks my-feature            # decompose into beads DAG
+forge prd my-feature              # interview → write PRD (1+ review pass)
+forge plan my-feature             # slice into phased plan (3+ review passes)
+forge tasks my-feature            # decompose into beads DAG (3+ review passes)
 bd ready                          # start executing tasks
 forge docs --ship my-feature      # graduate docs after shipping
 ```
@@ -75,6 +75,8 @@ forge docs --ship my-feature      # graduate docs after shipping
 ```bash
 forge prd my-feature              # write the PRD (human + agent)
 forge run my-feature              # agent does the rest: plan → tasks → implement → docs → PR
+# human reviews the PR
+forge retro my-feature            # root cause analysis if reviewer finds issues
 ```
 
 ### Check pipeline state
@@ -115,8 +117,11 @@ forge/
 | Needs plan | `forge plan <feature>` |
 | Needs tasks | `forge tasks <feature>` |
 | In progress | `bd ready` |
+| Needs reflection | Write `plans/<feature>/reflections.md` |
 | Needs graduation | `forge docs --ship <feature>` |
 | Complete | — |
+
+`forge retro <feature>` is not a pipeline stage — it's triggered when a reviewer finds issues on a "ready" PR. See `guidance/retro-process.md`.
 
 ## Development
 
