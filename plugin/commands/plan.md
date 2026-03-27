@@ -47,11 +47,26 @@ Break the PRD into **tracer bullet** phases. Each phase is a thin vertical slice
 - No "Phase 0" — infrastructure is part of Phase 1
 - If a phase has no user-visible behavior, it's probably a horizontal slice — reconsider
 
+**Value:**
+- Each phase should be a viable stopping point — shippable and valuable on its own
+- Rank phases by value delivered, not just technical dependency
+- Identify the earliest phase where a user could get real value
+- See [value.md](../../guidance/value.md) for the value-thinking framework
+
 ### Step 5: Quiz the user
 
 Present the proposed breakdown. For each phase: title + user stories covered. Ask about granularity, merging/splitting, and sequence. Iterate until approved.
 
-### Step 6: Write the plan
+### Step 6: Choose execution strategy
+
+Ask the user how they want `/forge:run` to execute this plan:
+
+- **`phase-prs`** — Run one phase at a time. After each phase, create a PR and stop. The human reviews, merges, and re-runs to continue. Use this when you want to steer between phases or when early phases might be sufficient.
+- **`single-pr`** — Run all phases in one shot. Create a single PR at the end. Use this for well-understood features where all phases are clearly needed.
+
+Record the choice in the plan frontmatter as `execution: phase-prs` or `execution: single-pr`.
+
+### Step 7: Write the plan
 
 Save to `plans/<feature>/plan.md`. Each phase gets: title, covered user stories, "what to build" description, and acceptance criteria checkboxes.
 

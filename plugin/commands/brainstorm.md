@@ -47,6 +47,10 @@ Help the user narrow down:
 - Which ideas have the best effort/impact ratio?
 - What are the deal-breaker constraints?
 - What's the simplest thing that could work?
+- Is this the most valuable problem we could solve right now? Why this over alternatives?
+- Who specifically benefits, and how soon would they see value?
+
+See [value.md](../../guidance/value.md) for the value-thinking framework.
 
 When the brainstorm feels complete, suggest running `/forge:prd <feature>` to formalize into a PRD.
 

@@ -22,7 +22,16 @@ Before interviewing, understand the current state:
 - Identify modules/components that will be affected
 - Note testing patterns and infrastructure already in place
 
-### Step 3: Interview relentlessly
+### Step 3: Establish value
+
+Before diving into design details, answer:
+
+- **Why this, why now?** — What makes this more valuable than alternatives the team could work on?
+- **What's the minimum that would solve the user's problem?** — Resist designing the full vision when a subset would ship real value sooner.
+
+Capture the answers in the PRD's Problem Statement. See [value.md](../../guidance/value.md) for the full framework.
+
+### Step 4: Interview relentlessly
 
 Walk every branch of the design tree. Resolve decision dependencies one-by-one.
 
@@ -42,7 +51,7 @@ Walk every branch of the design tree. Resolve decision dependencies one-by-one.
 - Present trade-offs clearly. Frame options and let the user choose.
 - Keep a running mental model of unresolved branches. Don't move on until each is settled.
 
-### Step 4: Sketch modules
+### Step 5: Sketch modules
 
 Identify modules that will be built or modified. Apply the **deep module principle**:
 
@@ -50,7 +59,7 @@ Identify modules that will be built or modified. Apply the **deep module princip
 
 For each module: responsibility, interface (inputs/outputs), connections to other modules.
 
-### Step 5: Write the PRD
+### Step 6: Write the PRD
 
 Write to `plans/<feature>/prd.md` with sections:
 

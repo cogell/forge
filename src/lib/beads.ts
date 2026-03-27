@@ -23,9 +23,9 @@ export interface ReadyTask {
  * Query beads for an epic matching the feature name.
  * Returns null if no epic found or bd is not available.
  */
-export async function queryBeadsEpic(feature: string): Promise<EpicInfo | null> {
+export async function queryBeadsEpic(feature: string, cwd?: string): Promise<EpicInfo | null> {
   try {
-    const result = await exec(`bd search "${feature}" --type epic --json`);
+    const result = await exec(`bd search "${feature}" --type epic --json`, cwd);
     if (!result.stdout.trim()) return null;
 
     const epics = JSON.parse(result.stdout);
@@ -35,7 +35,7 @@ export async function queryBeadsEpic(feature: string): Promise<EpicInfo | null> 
     const epic = epics[0];
 
     // Get children stats
-    const children = await exec(`bd list --parent ${epic.id} --json`);
+    const children = await exec(`bd list --parent ${epic.id} --json`, cwd);
     const tasks = children.stdout.trim() ? JSON.parse(children.stdout) : [];
 
     const closedTasks = tasks.filter((t: any) => t.status === "closed").length;
@@ -59,9 +59,9 @@ export async function queryBeadsEpic(feature: string): Promise<EpicInfo | null> 
 /**
  * Get ready (unblocked) tasks from beads.
  */
-export async function getReadyTasks(): Promise<ReadyTask[]> {
+export async function getReadyTasks(cwd?: string): Promise<ReadyTask[]> {
   try {
-    const result = await exec("bd ready --json");
+    const result = await exec("bd ready --json", cwd);
     if (!result.stdout.trim()) return [];
     return JSON.parse(result.stdout);
   } catch {
@@ -81,10 +81,11 @@ export async function isBdAvailable(): Promise<boolean> {
   }
 }
 
-async function exec(cmd: string): Promise<{ stdout: string; stderr: string }> {
+async function exec(cmd: string, cwd?: string): Promise<{ stdout: string; stderr: string }> {
   const proc = Bun.spawn(["sh", "-c", cmd], {
     stdout: "pipe",
     stderr: "pipe",
+    ...(cwd ? { cwd } : {}),
   });
 
   const stdout = await new Response(proc.stdout).text();

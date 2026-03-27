@@ -77,6 +77,7 @@ status: active
 feature: <feature-name>
 created: <YYYY-MM-DD>
 completed: null
+execution: phase-prs | single-pr
 ---
 
 # Plan: <Feature Name>
