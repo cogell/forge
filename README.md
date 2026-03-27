@@ -40,7 +40,7 @@ claude plugin marketplace add /path/to/forge   # register as local marketplace
 claude plugin install forge                     # install the plugin
 ```
 
-Restart Claude Code after installing. This gives you `/forge:brainstorm`, `/forge:prd`, `/forge:plan`, `/forge:tasks`, `/forge:run`, `/forge:retro`, `/forge:docs`, `/forge:status`, and `/forge:init` as slash commands.
+Restart Claude Code after installing. This gives you `/forge:brainstorm`, `/forge:prd`, `/forge:plan`, `/forge:tasks`, `/forge:run`, `/forge:reflect`, `/forge:retro`, `/forge:docs`, `/forge:status`, and `/forge:init` as slash commands.
 
 On session start, the plugin runs `forge status --json` to inject pipeline context automatically.
 
@@ -117,7 +117,7 @@ forge/
 | Needs plan | `forge plan <feature>` |
 | Needs tasks | `forge tasks <feature>` |
 | In progress | `bd ready` |
-| Needs reflection | Write `plans/<feature>/reflections.md` |
+| Needs reflection | `forge reflect <feature>` |
 | Needs graduation | `forge docs --ship <feature>` |
 | Complete | — |
 

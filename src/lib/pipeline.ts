@@ -104,7 +104,7 @@ function suggestAction(feature: string, stage: Stage): string {
     case "in-progress":
       return `bd ready`;
     case "needs-reflection":
-      return `Write plans/${feature}/reflections.md`;
+      return `forge reflect ${feature}`;
     case "needs-graduation":
       return `forge docs --ship ${feature}`;
     case "complete":

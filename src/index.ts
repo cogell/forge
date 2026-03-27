@@ -7,6 +7,7 @@ import { prd } from "./commands/prd";
 import { plan } from "./commands/plan";
 import { tasks } from "./commands/tasks";
 import { run } from "./commands/run";
+import { reflect } from "./commands/reflect";
 import { docs } from "./commands/docs";
 import { retro } from "./commands/retro";
 import { global } from "./commands/global";
@@ -19,6 +20,7 @@ const COMMANDS: Record<string, (args: string[]) => Promise<void>> = {
   plan,
   tasks,
   run,
+  reflect,
   docs,
   retro,
   global,
@@ -37,6 +39,7 @@ Commands:
   plan <feature>            Slice PRD into phased implementation plan
   tasks <feature>           Decompose plan into beads DAG
   run <feature>             Autopilot: plan → tasks → implement → docs → PR
+  reflect <feature>         Capture learnings from implementation
   retro <feature>           Root cause analysis when review finds issues
   docs [--phase|--ship] <f> Documentation lifecycle management
   global [root]             Scan all projects under root (default: ~/projects/)
