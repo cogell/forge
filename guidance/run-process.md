@@ -96,7 +96,19 @@ Push, create PR, stop and notify user for review. Don't start next phase until m
 1. **Ensure reflections exist** — `plans/<feature>/reflections.md` must exist before graduation. If phases were reflected on individually, review and add any final cross-cutting learnings.
 2. **Run full docs graduation (mandatory)** — `/forge:docs --ship <feature>`. Do NOT skip this.
 3. **Create final PR** (if single-PR mode)
-4. **Notify the human** that the feature is ready for review.
+4. **Notify the human** that the feature is ready for review. Include in the notification:
+   - Link to the PR
+   - Summary of what shipped
+   - If issues are found: `forge retro <feature>` to trigger root cause analysis
+
+### After human review
+
+The orchestrator's job ends at PR creation. What happens next depends on the reviewer:
+
+- **PR approved, no issues** — merge, done. The system worked.
+- **PR has issues** — the reviewer (human or agent) runs `/forge:retro <feature>`. This triggers root cause analysis: classify each issue, patch the system (guidance, review criteria, tooling), fix the PR, and append to `plans/<feature>/retro.md`. See [retro-process.md](retro-process.md) for the full protocol.
+
+Multiple review/retro rounds may occur. Each round appends to the retro doc. The goal is convergence to zero issues.
 
 ---
 

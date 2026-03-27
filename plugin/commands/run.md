@@ -19,10 +19,9 @@ Run `forge run $ARGUMENTS` to validate preconditions and see the execution plan.
 
 1. **Ensure plan exists.** If no plan, run the `/forge:plan` process. No human input needed — the PRD has the answers.
 2. **Ensure beads DAG exists.** If no epic, run the `/forge:tasks` process.
-3. **Decide PR strategy:**
-   - Count phases with ≥3 tasks as "large"
-   - If >3 large phases → phase PRs (one per phase)
-   - Otherwise → single PR
+3. **Read execution strategy** from `plans/<feature>/plan.md` frontmatter (`execution` field):
+   - `phase-prs` → one PR per phase, stop after each for human review
+   - `single-pr` → one branch, one PR at the end
 4. **Create feature branch:** `git checkout -b feat/<feature>`
 
 ### Phase 1-N: Execute Each Plan Phase
@@ -60,7 +59,12 @@ Push, create PR, stop and notify user for review. Don't start next phase until m
 
 1. Run full docs graduation: `/forge:docs --ship <feature>`
 2. Create final PR (if single-PR mode)
-3. Notify user
+3. Notify user — include: PR link, summary, and `forge retro <feature>` if issues are found
+
+### After review
+
+- **PR clean** — merge, done.
+- **Issues found** — reviewer (human or agent) runs `/forge:retro <feature>` to classify root causes, fix the system, and fix the PR. Multiple rounds may occur. See [retro-process.md](../../guidance/retro-process.md).
 
 ## Task Agent
 

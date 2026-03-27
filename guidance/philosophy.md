@@ -21,8 +21,12 @@ Planning artifacts *produce* knowledge artifacts. Execution *produces* reflectio
 4. Tasks         (.beads/)                           — the "do it now"
 5. Code                                              — the output
 6. Reflections   (plans/<feature>/reflections.md)   — learnings during execution
-7. Docs          (docs/)                             — graduated knowledge
+7. Review        (PR ready for human/agent review)  — the quality gate
+8. Retro         (plans/<feature>/retro.md)         — root cause analysis if review finds issues
+9. Docs          (docs/)                             — graduated knowledge
 ```
+
+Steps 7–8 may repeat: review finds issues → retro diagnoses and fixes the system → PR is updated → review again. The retro only triggers when there are issues; a clean review skips straight to docs.
 
 ## Reflections
 
@@ -45,6 +49,16 @@ Planning artifacts *produce* knowledge artifacts. Execution *produces* reflectio
 | **Theoretical** | Explanation | Reference |
 
 A document should be one type. Don't mix.
+
+## Retro
+
+`plans/<feature>/retro.md` is an append-only log of issues found during human/agent review that should have been caught upstream.
+
+**Why it exists:** Every review escape is a system defect — in the review criteria, task specs, project guidance, tooling, or forge workflow itself. The retro's output is always a concrete fix to the system, not just a note.
+
+**What to capture:** The issue, why it escaped, what category of root cause it falls into, and the fix applied.
+
+**The standard:** Zero issues at human review. The retro exists to close the gap.
 
 ## Core Principles
 

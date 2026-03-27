@@ -8,6 +8,8 @@ import { plan } from "./commands/plan";
 import { tasks } from "./commands/tasks";
 import { run } from "./commands/run";
 import { docs } from "./commands/docs";
+import { retro } from "./commands/retro";
+import { global } from "./commands/global";
 
 const COMMANDS: Record<string, (args: string[]) => Promise<void>> = {
   status,
@@ -18,6 +20,8 @@ const COMMANDS: Record<string, (args: string[]) => Promise<void>> = {
   tasks,
   run,
   docs,
+  retro,
+  global,
 };
 
 const HELP = `
@@ -33,7 +37,9 @@ Commands:
   plan <feature>            Slice PRD into phased implementation plan
   tasks <feature>           Decompose plan into beads DAG
   run <feature>             Autopilot: plan → tasks → implement → docs → PR
+  retro <feature>           Root cause analysis when review finds issues
   docs [--phase|--ship] <f> Documentation lifecycle management
+  global [root]             Scan all projects under root (default: ~/projects/)
 
 Options:
   --help, -h                Show this help
