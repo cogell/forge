@@ -70,6 +70,10 @@ Record the choice in the plan frontmatter as `execution: phase-prs` or `executio
 
 Save to `plans/<feature>/plan.md`. Each phase gets: title, covered user stories, "what to build" description, and acceptance criteria checkboxes.
 
+### Step 8: Review gate
+
+Before advancing to `/forge:tasks`, run the review gate per [review-gates.md](../../guidance/review-gates.md). Minimum 3 independent review passes (each a fresh context, full tools). No critical or major issues may remain. The plan is the first technical artifact — errors here cascade into every downstream step.
+
 ## Deep Reference
 
 See [plan-process.md](../../guidance/plan-process.md) for the full vertical slicing protocol.

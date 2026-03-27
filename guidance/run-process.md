@@ -6,7 +6,9 @@ Orchestrate the full post-PRD pipeline: plan → tasks → implement → docs �
 
 ## Prerequisites
 
-- `plans/<feature>/prd.md` must exist (human-authored via `/forge:prd`)
+- `plans/<feature>/prd.md` must exist (human-authored via `/forge:prd`) and have passed the review gate
+- `plans/<feature>/plan.md` should have passed 3+ review passes per [review-gates.md](review-gates.md)
+- Beads task definitions should have passed 3+ review passes per [review-gates.md](review-gates.md)
 - `bd` CLI installed and initialized in the project
 - Git repo with a clean working tree
 

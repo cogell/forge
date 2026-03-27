@@ -70,6 +70,10 @@ Write to `plans/<feature>/prd.md` with sections:
 - **Testing Decisions** — what to test and how
 - **Out of Scope** — explicit boundaries
 
+### Step 7: Review gate
+
+Before advancing to `/forge:plan`, run the review gate per [review-gates.md](../../guidance/review-gates.md). Minimum 1 independent review pass (fresh context, full tools). No critical or major issues may remain.
+
 ## Deep Reference
 
 See [prd-process.md](../../guidance/prd-process.md) for the full interview protocol and writing rules.

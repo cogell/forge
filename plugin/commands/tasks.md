@@ -67,6 +67,10 @@ bd swarm validate <epic-id>
 
 When tasks span layers (API → daemon → CLI), the `design` field of each task MUST use identical names for shared contracts. Name drift causes silent bugs.
 
+### Step 6: Review gate
+
+Before advancing to `/forge:run`, run the review gate per [review-gates.md](../../guidance/review-gates.md). Minimum 3 independent review passes (each a fresh context, full tools). No critical or major issues may remain. Task specs are the direct input to the implementing agent — ambiguity here causes wrong code.
+
 ## Deep Reference
 
 See [tasks-process.md](../../guidance/tasks-process.md) for the full decomposition protocol, complexity scoring formula, and structured content field reference.
