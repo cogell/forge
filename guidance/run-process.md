@@ -81,7 +81,36 @@ If a phase was straightforward and produced no surprises, a single line is fine:
 
 The point is to force the pause and look back — not to generate volume.
 
-#### Step 3: Graduate docs for this phase (mandatory)
+#### Step 3: Consolidate parallel work (conditional)
+
+After merging all tasks in a phase, check whether multiple task branches touched overlapping file sets. If they did, duplication is likely — parallel worktree agents can't see each other's code.
+
+**Trigger:** Two or more task branches in this phase modified files in the same directory. If the phase was a serial chain where each task built on the last, skip this step — there's nothing to dedup.
+
+**How to detect overlap:**
+
+```bash
+# For each merged task branch in this phase, collect the files it touched.
+# If any directory appears in 2+ task branches' file lists, consolidate.
+git diff --name-only <phase-start-sha>..HEAD | sort | uniq -c | sort -rn
+# Files touched by multiple merges will have count > 1
+```
+
+**Consolidation actions (run on the feature branch, not in a worktree):**
+
+1. Review files touched by 2+ task branches for duplicated logic
+2. Extract shared hooks, utilities, or constants into appropriate shared locations
+3. Verify consistent naming across merged work (routes, types, variables)
+4. Run the full build and test suite to confirm nothing broke
+5. Commit as a single consolidation commit:
+
+```bash
+git add <files> && git commit -m "refactor(<feature>): consolidate phase <N> parallel work"
+```
+
+If no duplication is found, skip the commit — don't create empty consolidation commits.
+
+#### Step 4: Graduate docs for this phase (mandatory)
 
 This is NOT optional. Run the phase-complete workflow from [docs-process.md](docs-process.md) before moving to the next phase or creating a PR.
 
@@ -96,7 +125,7 @@ Checklist — confirm each before proceeding:
 
 If none apply, that's fine — but you must check.
 
-#### Step 4: Phase PR (if phase-PR mode)
+#### Step 5: Phase PR (if phase-PR mode)
 
 Push, create PR, stop and notify user for review. Don't start next phase until merged.
 
