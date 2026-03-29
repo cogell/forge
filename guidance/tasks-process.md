@@ -89,7 +89,61 @@ bd create "Sub-task title" -t task -p 1 \
 
 Update downstream dependencies to point at specific children, not the parent. Each child should score ≤6. Max nesting: 3 levels.
 
-### Step 7: Validate the DAG
+### Step 7: Cross-reference the plan
+
+After initial decomposition, walk the plan section-by-section and verify nothing was dropped in translation. This is the single highest-leverage quality gate — plans contain the right information, but tasks routinely lose it.
+
+**7a. Map testing scenarios to tasks**
+
+Read the plan's testing section (and the PRD's Testing Decisions). For each test scenario, find the task whose acceptance criteria covers it. If a scenario has no home:
+
+- Add it to the most relevant task's acceptance criteria, OR
+- Create a dedicated test task (depends on the implementation task, blocks downstream)
+
+A task that ships endpoints without the plan's specified integration tests is incomplete.
+
+**7b. Translate UX-sensitive language**
+
+Scan the plan for words that imply timing or interaction guarantees: *immediately, instant, without delay, real-time, without page reload, seamless, live*. These are UX contracts, not implementation suggestions. Translate each into a concrete implementation requirement in the task's acceptance criteria:
+
+| Plan says | Task acceptance criterion should say |
+|-----------|--------------------------------------|
+| "immediately" / "instant" | Optimistic update with rollback on failure |
+| "without page reload" | Local state update, no refetch required |
+| "real-time" | WebSocket/SSE push, no polling interval visible to user |
+| "seamless" | No loading spinner, no layout shift |
+
+If the plan uses UX language that doesn't have a clear technical translation, flag it for clarification before creating the task.
+
+**7c. Generate zero-data state criteria**
+
+For every task that consumes backend data with defaults (the plan says "default X" or "falls back to Y"), add an acceptance criterion:
+
+```
+- [ ] Works correctly when API returns empty/default response (no prior user configuration)
+```
+
+This is especially important for features that layer on top of optional configuration — the first-use experience is the most common untested path.
+
+**7d. Verify durable decisions are actionable**
+
+Walk the plan's Architectural Decisions / Durable Decisions section. For each decision:
+
+- If it names a shared constant (e.g., `DEFAULT_OP_START = 8`), verify the relevant tasks reference that constant name in their `design` field — not the raw value.
+- If a decision defines a default value that will appear in 3+ tasks, and it's NOT named as a constant, flag it back to the plan author. Hardcoded magic numbers across files are a maintenance hazard.
+
+**7e. Reconciliation checklist**
+
+After the pass, confirm:
+
+- [ ] Every test scenario in the plan maps to at least one task's acceptance criteria
+- [ ] Every UX-sensitive word in the plan has a concrete technical translation in a task
+- [ ] Every task consuming defaultable backend data has a zero-data acceptance criterion
+- [ ] Every shared constant from durable decisions appears by name (not raw value) in task designs
+
+Items that fail reconciliation get added to tasks or flagged to the user. Do not proceed to DAG validation until the checklist passes.
+
+### Step 8: Validate the DAG
 
 ```bash
 bd swarm validate <epic-id>

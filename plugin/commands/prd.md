@@ -43,6 +43,7 @@ Walk every branch of the design tree. Resolve decision dependencies one-by-one.
 - What existing behavior must be preserved?
 - What are the dependencies between design decisions?
 - What is explicitly out of scope?
+- **Granularity of toggles/filters/settings** — Global, per-entity, per-day, or per-entity-per-day? Different values per user/role? Ambiguity here causes late rework.
 
 **Interview principles:**
 

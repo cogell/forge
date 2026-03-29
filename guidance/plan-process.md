@@ -30,6 +30,13 @@ Before slicing, identify high-level decisions unlikely to change during implemen
 
 These go in the plan header so every phase can reference them.
 
+**Name shared constants explicitly.** When a durable decision defines a default value that will appear in 3+ files across implementation, declare it as a named constant in the plan:
+
+> Default operating hours: `DEFAULT_OP_START = 8`, `DEFAULT_OP_END = 17`
+> Toggle default: `SLOTS_VISIBLE_DEFAULT = true`
+
+This gives task agents a clear signal to extract the value into a shared constant rather than hardcoding it across files. Prose-only defaults ("default 8am–5pm") get inlined as magic numbers.
+
 ### Step 4: Audit interfaces and system boundaries
 
 **Interface fitness:** For each existing type, interface, or schema this feature will extend or modify, check whether the current design cleanly supports the extension. If the extension requires workarounds (e.g., type casts, adapter layers, monkey-patching), add a prep task in Phase 1 to fix the interface first. Workarounds in the plan become tech debt in the code.

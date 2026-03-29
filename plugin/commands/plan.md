@@ -30,6 +30,8 @@ Before slicing, identify high-level decisions unlikely to change:
 
 These go in the plan header so every phase can reference them.
 
+**Name shared constants:** When a decision defines a default value that will appear in 3+ files, declare it as a named constant (e.g., `DEFAULT_OP_START = 8`). Prose-only defaults get hardcoded as magic numbers by task agents.
+
 ### Step 4: Map file structure
 
 Before slicing, map out which files will be created or modified and what each is responsible for. This is where decomposition decisions get locked in:
