@@ -2,14 +2,14 @@
  * forge run <feature>
  *
  * Validate preconditions for automated execution.
- * Checks: PRD exists, git clean, bd available.
+ * Checks: PRD exists, forge.json configured, git clean.
  * Reports what needs to happen (plan, tasks, or execute).
  * The agent handles the actual orchestration.
  */
 
 import { existsSync } from "fs";
 import { join } from "path";
-import { isBdAvailable, queryBeadsEpic } from "../lib/beads";
+import { queryFeatureTasks, readProjectPrefix } from "../lib/tasks";
 
 export async function run(args: string[]): Promise<void> {
   const json = args.includes("--json");
@@ -24,20 +24,29 @@ export async function run(args: string[]): Promise<void> {
   const prdFile = join(cwd, "plans", feature, "prd.md");
   const planFile = join(cwd, "plans", feature, "plan.md");
 
+  // Check forge.json exists (replaces bd availability check)
+  let forgeConfigured = false;
+  try {
+    readProjectPrefix(cwd);
+    forgeConfigured = true;
+  } catch {
+    forgeConfigured = false;
+  }
+
   // Precondition checks
   const checks = {
     hasPrd: existsSync(prdFile),
     hasPlan: existsSync(planFile),
-    bdAvailable: await isBdAvailable(),
+    forgeConfigured,
     gitClean: await isGitClean(),
     hasEpic: false,
     epicId: null as string | null,
   };
 
-  const epic = await queryBeadsEpic(feature);
+  const epic = queryFeatureTasks(feature, cwd);
   if (epic) {
     checks.hasEpic = true;
-    checks.epicId = epic.epicId;
+    checks.epicId = epic.primaryEpicId;
   }
 
   if (!checks.hasPrd) {
@@ -46,9 +55,9 @@ export async function run(args: string[]): Promise<void> {
     process.exit(1);
   }
 
-  if (!checks.bdAvailable) {
-    if (json) console.log(JSON.stringify({ error: "no-bd" }));
-    else console.error("bd CLI not found.");
+  if (!checks.forgeConfigured) {
+    if (json) console.log(JSON.stringify({ error: "no-forge-json" }));
+    else console.error("No forge.json found. Run 'forge init' first.");
     process.exit(1);
   }
 

@@ -16,7 +16,6 @@ Most features enter at `forge prd`. Run `forge brainstorm` first when you need t
 ### Prerequisites
 
 - [Bun](https://bun.sh) (runtime)
-- [beads](https://github.com/steveyegge/beads) (`bd` CLI) for task decomposition and tracking
 
 ### CLI
 
@@ -71,8 +70,8 @@ cd your-project
 forge init                        # create plans/ and docs/ structure
 forge prd my-feature              # interview → write PRD + review gate
 forge plan my-feature             # slice into phased plan + review gate
-forge tasks my-feature            # decompose into beads DAG + review gate
-bd ready                          # start executing tasks
+forge tasks my-feature            # decompose into tasks DAG + review gate
+forge tasks ready                 # start executing tasks
 forge docs --ship my-feature      # graduate docs after shipping
 
 # Optional: brainstorm first when the problem space is ambiguous
@@ -101,7 +100,7 @@ forge status --json               # machine-readable
 
 ```
 forge/
-├── src/                 # Bun CLI — state machine, filesystem + beads queries
+├── src/                 # Bun CLI — state machine, filesystem + task queries
 ├── plugin/              # Claude Plugin (marketplace installable)
 │   ├── .claude-plugin/  #   plugin manifest
 │   └── commands/        #   agent-facing /forge:* slash commands
@@ -115,7 +114,7 @@ forge/
 |-------|-----------|-----------|
 | Planning | `plans/` | Feature-scoped: active → completed → archived |
 | Knowledge | `docs/` | Evergreen: trimmed, never "completed" |
-| Execution | `.beads/` | Transient: closed and compacted |
+| Execution | `plans/<feature>/tasks.json` | Transient: closed and compacted |
 
 ## Pipeline stages
 
@@ -125,7 +124,7 @@ forge/
 | Needs PRD | `forge prd <feature>` |
 | Needs plan | `forge plan <feature>` |
 | Needs tasks | `forge tasks <feature>` |
-| In progress | `bd ready` |
+| In progress | `forge tasks ready` |
 | Needs reflection | `forge reflect <feature>` |
 | Needs graduation | `forge docs --ship <feature>` |
 | Complete | — |

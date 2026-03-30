@@ -8,20 +8,20 @@
 
 import { detectPipeline, detectFeature } from "../lib/pipeline";
 import { formatPipelineStatus, formatFeatureStatus } from "../lib/format";
-import { getReadyTasks } from "../lib/beads";
+import { getReadyTasks } from "../lib/tasks";
 
 export async function status(args: string[]): Promise<void> {
   const json = args.includes("--json");
   const feature = args.find((a) => !a.startsWith("-"));
   const cwd = process.cwd();
 
-  const readyTasks = await getReadyTasks();
-
   if (feature) {
-    const state = await detectFeature(cwd, feature);
+    const state = detectFeature(cwd, feature);
+    const readyTasks = getReadyTasks(cwd, feature);
     console.log(formatFeatureStatus(state, readyTasks, json));
   } else {
-    const state = await detectPipeline(cwd);
+    const state = detectPipeline(cwd);
+    const readyTasks = getReadyTasks(cwd);
     console.log(formatPipelineStatus(state, readyTasks, json));
   }
 }

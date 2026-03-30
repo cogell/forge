@@ -27,9 +27,9 @@ Output a report with Good / Needs Attention / Missing sections.
 
 ### Phase Graduation (`/forge:docs --phase <feature>`)
 
-Run when a beads phase finishes. Lightweight pass:
+Run when a task phase finishes. Lightweight pass:
 
-1. Identify what shipped — check recently closed beads
+1. Identify what shipped — check recently closed tasks
 2. Decision-worthy? New technical approach, library, schema change → ADR in `docs/decisions/`
 3. Guide-worthy? New repeatable workflow → guide in `docs/guides/`
 4. Reference changed? Config, env vars, API surface → update `docs/reference/`

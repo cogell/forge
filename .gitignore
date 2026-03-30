@@ -11,3 +11,4 @@ bin/forge
 
 # Temporary files
 tmp/
+.claude/

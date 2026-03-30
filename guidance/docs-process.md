@@ -82,7 +82,7 @@ ORPHANS
 [ ] No empty directories
 
 REFLECTIONS
-[ ] Active plans with closed beads have a reflections.md
+[ ] Active plans with closed tasks have a reflections.md
 [ ] No reflections.md in archived plans without graduation annotations
 [ ] No global agents/reflections.md — reflections scoped to plans/<feature>/
 
@@ -101,9 +101,9 @@ DIATAXIS
 
 ## Phase Complete (`/forge:docs --phase <feature>`)
 
-Run when a beads phase finishes. Lightweight pass.
+Run when a task phase finishes. Lightweight pass.
 
-1. Identify what shipped — check recently closed beads
+1. Identify what shipped — check recently closed tasks
 2. Decision-worthy? → ADR in `docs/decisions/`
 3. Guide-worthy? → guide in `docs/guides/`
 4. Reference changed? → update `docs/reference/`

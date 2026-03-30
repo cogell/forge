@@ -75,7 +75,7 @@ Break the PRD into **tracer bullet** phases. Each phase is a thin vertical slice
 
 ### Step 7: Scope check
 
-If the plan spans multiple independent subsystems with no shared interfaces, consider whether it should be separate plans — one per subsystem. Each plan should produce working, testable software on its own. However, a single plan that crosses subsystems is fine when the phases share data models, APIs, or other contracts — the task decomposition (beads DAG) gives enough structure to manage the complexity.
+If the plan spans multiple independent subsystems with no shared interfaces, consider whether it should be separate plans — one per subsystem. Each plan should produce working, testable software on its own. However, a single plan that crosses subsystems is fine when the phases share data models, APIs, or other contracts — the task decomposition (tasks DAG) gives enough structure to manage the complexity.
 
 ### Step 8: Quiz the user
 

@@ -1,18 +1,18 @@
 ---
-description: Decompose an implementation plan into a beads epic with child tasks and dependencies
+description: Decompose an implementation plan into an epic with child tasks and dependencies
 argument-hint: <feature-name>
 ---
 
-Run `forge tasks $ARGUMENTS` to validate preconditions (plan exists, bd available).
+Run `forge tasks $ARGUMENTS` to validate preconditions (plan exists).
 
-Then decompose the plan into beads:
+Then decompose the plan into tasks:
 
 ## Process
 
 ### Step 1: Create the phase epic
 
 ```bash
-bd create "Phase N: <Phase Title>" -t epic -p 1 \
+forge tasks epic create "Phase N: <Phase Title>" -p 1 \
   -d "Source: plans/<feature>/plan.md — Phase N" \
   -l "phase:N"
 ```
@@ -29,8 +29,8 @@ For each acceptance criterion or logical unit of work, create a child task.
 **Create with structured content:**
 
 ```bash
-bd create "Task title" \
-  -t task -p <0-4> \
+forge tasks create "Task title" \
+  -p <0-4> \
   --parent <epic-id> \
   -l "complexity:<1-10>,phase:N" \
   -d "WHAT: 2-4 sentence problem statement" \
@@ -43,7 +43,7 @@ bd create "Task title" \
 ### Step 3: Set dependencies
 
 ```bash
-bd dep add <blocked-task> <blocking-task>
+forge tasks dep add <blocked-task> <blocking-task>
 ```
 
 ### Step 4: Score complexity
@@ -74,7 +74,7 @@ Confirm all items reconcile before proceeding. See [tasks-process.md](../../guid
 ### Step 6: Validate the DAG
 
 ```bash
-bd swarm validate <epic-id>
+forge tasks validate <epic-id>
 ```
 
 ### Cross-boundary contracts

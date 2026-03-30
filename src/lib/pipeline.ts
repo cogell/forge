@@ -1,12 +1,12 @@
 /**
  * Pipeline state machine.
- * Reads the filesystem + beads state to determine where a feature stands.
+ * Reads the filesystem + task state to determine where a feature stands.
  */
 
 import { existsSync } from "fs";
 import { join } from "path";
 import { readPlans, readFeaturePlan, type PlanInfo } from "./plans";
-import { queryBeadsEpic, type EpicInfo } from "./beads";
+import { queryFeatureTasks, type EpicInfo } from "./tasks";
 
 export type Stage =
   | "no-project"     // No plans/ or docs/ dirs
@@ -31,7 +31,7 @@ export interface PipelineState {
   features: FeatureState[];
 }
 
-export async function detectPipeline(cwd: string): Promise<PipelineState> {
+export function detectPipeline(cwd: string): PipelineState {
   const plansDir = join(cwd, "plans");
   const docsDir = join(cwd, "docs");
 
@@ -45,7 +45,7 @@ export async function detectPipeline(cwd: string): Promise<PipelineState> {
   const features: FeatureState[] = [];
 
   for (const plan of plans) {
-    const epic = await queryBeadsEpic(plan.feature, cwd);
+    const epic = queryFeatureTasks(plan.feature, cwd);
     const stage = determineStage(plan, epic);
 
     features.push({
@@ -60,10 +60,10 @@ export async function detectPipeline(cwd: string): Promise<PipelineState> {
   return { hasProject, features };
 }
 
-export async function detectFeature(cwd: string, feature: string): Promise<FeatureState> {
+export function detectFeature(cwd: string, feature: string): FeatureState {
   const planDir = join(cwd, "plans", feature);
   const plan = readFeaturePlan(planDir, feature);
-  const epic = await queryBeadsEpic(feature, cwd);
+  const epic = queryFeatureTasks(feature, cwd);
   const stage = determineStage(plan, epic);
 
   return {
@@ -98,7 +98,7 @@ function suggestAction(feature: string, stage: Stage): string {
     case "needs-tasks":
       return `forge tasks ${feature}`;
     case "in-progress":
-      return `bd ready`;
+      return `forge tasks ready`;
     case "needs-reflection":
       return `forge reflect ${feature}`;
     case "needs-graduation":

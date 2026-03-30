@@ -2,11 +2,14 @@
  * forge init
  *
  * Set up plans/ and docs/ directory structure.
+ * Optionally configure project prefix via --prefix flag or interactive prompt.
  * Idempotent — safe to run multiple times.
  */
 
 import { existsSync, mkdirSync, writeFileSync } from "fs";
 import { join } from "path";
+import { createInterface } from "readline";
+import { isValidPrefix } from "../lib/tasks";
 
 const DIRS = [
   "plans/_template",
@@ -22,6 +25,56 @@ export async function init(args: string[]): Promise<void> {
   const created: string[] = [];
   const existed: string[] = [];
 
+  // --- Prefix / forge.json handling ---
+  const forgeJsonPath = join(cwd, "forge.json");
+  const forgeJsonExists = existsSync(forgeJsonPath);
+
+  if (!forgeJsonExists) {
+    const prefixIdx = args.indexOf("--prefix");
+    const prefixArg = prefixIdx !== -1 ? args[prefixIdx + 1] : undefined;
+
+    if (prefixArg !== undefined) {
+      // Validate prefix from --prefix flag
+      if (!isValidPrefix(prefixArg)) {
+        if (json) {
+          console.log(
+            JSON.stringify({
+              error: "invalid-prefix",
+              prefix: prefixArg,
+              message:
+                "Must be 2-10 uppercase alphanumeric characters (e.g., FORGE).",
+            })
+          );
+        } else {
+          console.error(
+            `Invalid prefix: "${prefixArg}". Must be 2-10 uppercase alphanumeric characters (e.g., FORGE).`
+          );
+        }
+        process.exit(1);
+      }
+
+      writeFileSync(
+        forgeJsonPath,
+        JSON.stringify({ prefix: prefixArg }, null, 2) + "\n"
+      );
+      created.push("forge.json");
+    } else if (process.stdin.isTTY && !json) {
+      // Interactive prompt
+      const prefix = await promptForPrefix();
+      if (prefix) {
+        writeFileSync(
+          forgeJsonPath,
+          JSON.stringify({ prefix }, null, 2) + "\n"
+        );
+        created.push("forge.json");
+      }
+    }
+    // Non-interactive without --prefix: skip silently
+  } else {
+    existed.push("forge.json");
+  }
+
+  // --- Directory creation (original behavior preserved) ---
   for (const dir of DIRS) {
     const full = join(cwd, dir);
     if (existsSync(full)) {
@@ -65,6 +118,46 @@ export async function init(args: string[]): Promise<void> {
   if (created.length === 0) {
     console.log("Project already initialized. Nothing to do.");
   }
+}
+
+/**
+ * Prompt the user for a project prefix interactively.
+ * Loops until a valid prefix is entered.
+ */
+function promptForPrefix(): Promise<string | null> {
+  return new Promise((resolve) => {
+    const rl = createInterface({
+      input: process.stdin,
+      output: process.stdout,
+    });
+
+    let resolved = false;
+
+    function ask() {
+      rl.question("Project prefix (e.g., FORGE): ", (answer) => {
+        const trimmed = answer.trim();
+        if (isValidPrefix(trimmed)) {
+          resolved = true;
+          rl.close();
+          resolve(trimmed);
+        } else {
+          console.log(
+            "Invalid prefix. Must be 2-10 uppercase alphanumeric characters."
+          );
+          ask();
+        }
+      });
+    }
+
+    rl.on("close", () => {
+      // If closed without valid answer (e.g., Ctrl+D), resolve null
+      if (!resolved) {
+        resolve(null);
+      }
+    });
+
+    ask();
+  });
 }
 
 const PRD_TEMPLATE = `---

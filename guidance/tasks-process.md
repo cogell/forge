@@ -1,18 +1,18 @@
-# Forge: Decompose Plan into Beads
+# Forge: Decompose Plan into Tasks
 
-Take an implementation plan and decompose each phase into a beads epic with child tasks, dependencies (DAG), and structured content. Requires `bd` CLI.
+Take an implementation plan and decompose each phase into an epic with child tasks, dependencies (DAG), and structured content.
 
 ## Process
 
 ### Step 1: Create the phase epic
 
 ```bash
-bd create "Phase N: <Phase Title>" -t epic -p 1 \
+forge tasks epic create "Phase N: <Phase Title>" -p 1 \
   -d "Source: plans/<feature>/plan.md — Phase N" \
   -l "phase:N"
 ```
 
-Note the returned ID (e.g., `bd-a3f8`).
+Note the returned ID (e.g., `FORGE-a3f8`).
 
 ### Step 2: Decompose into tasks
 
@@ -28,7 +28,7 @@ Read the plan phase. For each acceptance criterion or logical unit of work, crea
 **Create each task with structured content:**
 
 ```bash
-bd create "Task title" \
+forge tasks create "Task title" \
   -t task -p <0-4> \
   --parent <epic-id> \
   -l "complexity:<1-10>,phase:N" \
@@ -43,7 +43,7 @@ Migration: none (or 0002_add_foo.sql — description)"
 ### Step 3: Set dependencies
 
 ```bash
-bd dep add bd-a3f8.2 bd-a3f8.1   # .2 is blocked by .1
+forge tasks dep add FORGE-a3f8.2 FORGE-a3f8.1   # .2 is blocked by .1
 ```
 
 Direction: first arg is **blocked by** second arg.
@@ -80,11 +80,11 @@ When collapsing, sum the file lists from each task's `notes` field into one task
 Tasks scoring 7+ become mini-epics with children:
 
 ```bash
-bd create "Sub-task title" -t task -p 1 \
-  --parent bd-a3f8.3 \
+forge tasks create "Sub-task title" -t task -p 1 \
+  --parent FORGE-a3f8.3 \
   -l "complexity:3,phase:N" \
   --design "..." --acceptance "..."
-# Creates bd-a3f8.3.1
+# Creates FORGE-a3f8.3.1
 ```
 
 Update downstream dependencies to point at specific children, not the parent. Each child should score ≤6. Max nesting: 3 levels.
@@ -146,7 +146,7 @@ Items that fail reconciliation get added to tasks or flagged to the user. Do not
 ### Step 8: Validate the DAG
 
 ```bash
-bd swarm validate <epic-id>
+forge tasks validate <epic-id>
 ```
 
 Checks for: correct direction, orphans, cycles, disconnected subgraphs. Reports ready fronts, parallelism, and estimated worker-sessions. Fix issues before proceeding.

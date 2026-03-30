@@ -9,6 +9,7 @@
   "scripts": {
     "build": "bun build src/index.ts --outfile bin/forge --target bun",
     "dev": "bun run src/index.ts",
+    "test": "bun test",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
