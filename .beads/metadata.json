@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "cogell",
+  "project_id": "a56cb618-e88e-485d-bb48-0fdd12f7d5a6"
+}
