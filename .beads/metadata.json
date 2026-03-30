@@ -2,6 +2,6 @@
   "database": "dolt",
   "backend": "dolt",
   "dolt_mode": "embedded",
-  "dolt_database": "cogell",
-  "project_id": "a2d717f9-9099-413d-9e9c-1ad2ebef2336"
+  "dolt_database": "forge",
+  "project_id": "ea8b6170-b8a2-4064-856c-9e84e44328f1"
 }
