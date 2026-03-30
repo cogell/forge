@@ -8,3 +8,6 @@ bin/forge
 .dolt/
 *.db
 .beads-credential-key
+
+# Temporary files
+tmp/
