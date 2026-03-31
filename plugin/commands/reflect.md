@@ -15,8 +15,8 @@ Then review the implementation work and write reflections.
 # Check what's been done
 forge reflect <feature>
 
-# Read closed tasks for this feature
-forge tasks list --parent <epic-id> --status closed --json
+# Read tasks for this feature (filter closed tasks from output)
+forge tasks list <feature> --json
 
 # Read existing reflections (if any)
 cat plans/<feature>/reflections.md

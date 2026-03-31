@@ -4,11 +4,6 @@ bin/forge
 *.tsbuildinfo
 .DS_Store
 
-# Beads / Dolt files (added by bd init)
-.dolt/
-*.db
-.beads-credential-key
-
 # Temporary files
 tmp/
 .claude/

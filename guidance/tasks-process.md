@@ -29,7 +29,7 @@ Read the plan phase. For each acceptance criterion or logical unit of work, crea
 
 ```bash
 forge tasks create "Task title" \
-  -t task -p <0-4> \
+  -p <0-4> \
   --parent <epic-id> \
   -l "complexity:<1-10>,phase:N" \
   -d "WHAT: 2-4 sentence problem statement" \
@@ -80,7 +80,7 @@ When collapsing, sum the file lists from each task's `notes` field into one task
 Tasks scoring 7+ become mini-epics with children:
 
 ```bash
-forge tasks create "Sub-task title" -t task -p 1 \
+forge tasks create "Sub-task title" -p 1 \
   --parent FORGE-a3f8.3 \
   -l "complexity:3,phase:N" \
   --design "..." --acceptance "..."
@@ -170,6 +170,8 @@ Checks for: correct direction, orphans, cycles, disconnected subgraphs. Reports 
 | `design` | `--design` | The HOW | Types, interfaces, signatures, file paths |
 | `acceptance_criteria` | `--acceptance` | Done when | Markdown checkboxes |
 | `notes` | `--notes` | Everything else | Files list, migrations, gotchas, test strategy |
+
+All flags above work on both `create` and `update`. On `update`, `--acceptance` and `--label` **append** to existing values (labels are idempotent). Run `forge tasks update --help` for the full flag list.
 
 ### Cross-boundary contracts
 

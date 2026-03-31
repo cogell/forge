@@ -87,6 +87,23 @@ When tasks span layers (API → daemon → CLI), the `design` field of each task
 
 Before advancing to `/forge:run`, run the review gate per [review-gates.md](../../guidance/review-gates.md). Run the self-review checklist first, then external review. Each review pass uses a fresh context with full tools. Advance when a pass surfaces no critical or major issues.
 
+### Command quick reference
+
+Run `forge tasks --help` for all subcommands, or `forge tasks <subcommand> --help` for detailed flags and argument order.
+
+Key commands during decomposition:
+
+```bash
+forge tasks epic create <feature> "title"          # create epic
+forge tasks create <feature> "title" [options]      # create task
+forge tasks dep add <blocked> <blocker>             # set dependency
+forge tasks update <task-id> [options]              # modify fields (--acceptance/-a, --label/-l, --status, etc.)
+forge tasks validate <feature>                      # check DAG
+forge tasks show <task-id>                          # inspect epic or task
+forge tasks list [feature]                          # list all tasks
+forge tasks ready [feature]                         # unblocked tasks
+```
+
 ## Deep Reference
 
 See [tasks-process.md](../../guidance/tasks-process.md) for the full decomposition protocol, complexity scoring formula, and structured content field reference.

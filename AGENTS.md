@@ -29,12 +29,15 @@ cp -rf source dest          # NOT: cp -r source dest
 ## Task Tracking
 
 ```bash
+forge tasks                    # List all subcommands
 forge tasks ready              # Find available work
 forge tasks show <id>          # View issue details
 forge tasks update <id> --status in_progress  # Claim work
 forge tasks close <id>         # Complete work
 forge tasks list               # Full task overview
 ```
+
+Run `forge tasks --help` or `forge tasks <subcommand> --help` for full flag reference.
 
 - Use `forge tasks` for ALL task tracking — do NOT use TodoWrite, TaskCreate, or markdown TODO lists
 

@@ -1,6 +1,6 @@
 # Forge: Test-Driven Development
 
-Protocol for writing tests first. Used at two points in the pipeline: bead authoring ([tasks-process.md](tasks-process.md)) and task execution ([run-process.md](run-process.md)).
+Protocol for writing tests first. Used at two points in the pipeline: task authoring ([tasks-process.md](tasks-process.md)) and task execution ([run-process.md](run-process.md)).
 
 ---
 
@@ -12,9 +12,9 @@ Write the test before the implementation. Watch it fail before making it pass. N
 
 ---
 
-## Part 1: Writing TDD-Ready Beads (authoring time)
+## Part 1: Writing TDD-Ready Tasks (authoring time)
 
-A bead can only be implemented test-first if it tells the task agent what to test. Acceptance criteria must be written as **observable behaviors**, not steps.
+A task can only be implemented test-first if it tells the task agent what to test. Acceptance criteria must be written as **observable behaviors**, not steps.
 
 **TDD-unfriendly** (steps):
 ```
@@ -51,7 +51,7 @@ If the design field is vague, the test agent will guess. Don't make it guess.
 
 ### RED — Write the failing test
 
-1. Read the bead's `acceptance_criteria` and `design` fields
+1. Read the task's `acceptance_criteria` and `design` fields
 2. Write tests that assert each acceptance criterion
 3. Run the test suite — the new tests **must fail**
 4. Check the failure mode:
@@ -93,9 +93,9 @@ Watching the test fail is not a formality. It's the proof that the test is actua
 
 ## When There Is No Test Infrastructure
 
-If the project has no testing setup, the **first task of Phase 1** must create it. Do not start any other bead.
+If the project has no testing setup, the **first task of Phase 1** must create it. Do not start any other task.
 
-That bead:
+That task:
 - `description`: "Set up test infrastructure"
 - `acceptance_criteria`: At least one example test running and passing via `<test command>`
 - `priority`: Critical (0) — everything else depends on it

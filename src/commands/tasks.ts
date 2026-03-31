@@ -48,8 +48,211 @@ const VALUE_FLAGS = new Set([
 
 /** Boolean flags that don't consume a value. */
 const BOOLEAN_FLAGS = new Set([
-  "--json", "--project", "--force",
+  "--json", "--project", "--force", "--help", "-h",
 ]);
+
+const TASKS_HELP = `
+forge tasks — task management
+
+Usage: forge tasks <subcommand> [args] [options]
+
+Subcommands:
+  list [feature]                            List all epics and tasks
+  show <task-id>                            Show epic or task details
+  ready [feature]                           Show unblocked, ready-to-start tasks
+  create <feature|--project> "title"        Create a task under an epic
+  epic create <feature|--project> "title"   Create an epic
+  update <task-id> [--field value...]       Update task fields
+  close <task-id>                           Close a task (validates dependencies)
+  comment <task-id> "message"               Add a comment to a task
+  label <task-id> <label>                   Add a label to a task
+  dep add|remove <blocked> <blocker>        Manage task dependencies
+  validate [feature|--project]              Validate DAG integrity
+  <feature>                                 Scaffold or show tasks.json status
+
+Global options:
+  --help, -h      Show help for a subcommand
+  --json          Output as JSON (for agent consumption)
+
+Run 'forge tasks <subcommand> --help' for detailed usage.
+`.trim();
+
+const SUBCOMMAND_HELP: Record<string, string> = {
+  list: `
+forge tasks list — list epics and tasks
+
+Usage: forge tasks list [feature] [options]
+
+Arguments:
+  feature         Show tasks for a specific feature (omit to list all)
+
+Options:
+  --project       Show project-level tasks only
+  --json          Output as JSON
+  --help, -h      Show this help
+`.trim(),
+
+  show: `
+forge tasks show — display epic or task details
+
+Usage: forge tasks show <task-id> [options]
+
+Arguments:
+  task-id         The ID to look up (e.g. TEST-1 for epic, TEST-1.2 for task)
+
+Options:
+  --json          Output as JSON
+  --help, -h      Show this help
+
+Note: The task ID is looked up across all feature files automatically —
+you do not need to specify the feature name.
+`.trim(),
+
+  ready: `
+forge tasks ready — show unblocked tasks ready to start
+
+Usage: forge tasks ready [feature] [options]
+
+Arguments:
+  feature         Filter to a specific feature (omit to scan all)
+
+Options:
+  --json          Output as JSON
+  --help, -h      Show this help
+`.trim(),
+
+  create: `
+forge tasks create — create a new task
+
+Usage: forge tasks create <feature|--project> "title" [options]
+
+Arguments:
+  feature         The feature this task belongs to
+  title           Task title (quoted string)
+
+Options:
+  --parent <id>          Parent epic or task ID (auto-detects if only one epic)
+  --priority, -p <0-4>   Priority level (default: 2)
+  --acceptance, -a <txt>  Acceptance criterion (repeatable)
+  --label, -l <label>    Label to add (repeatable)
+  -d, --description <t>  Short description
+  --design <text>        Design notes
+  --notes <text>         Implementation notes
+  --project              Create under project-level tasks
+  --json                 Output as JSON
+  --help, -h             Show this help
+`.trim(),
+
+  epic: `
+forge tasks epic — manage epics
+
+Usage: forge tasks epic create <feature|--project> "title"
+
+Arguments:
+  feature         The feature this epic belongs to
+  title           Epic title (quoted string)
+
+Options:
+  --project       Create a project-level epic
+  --json          Output as JSON
+  --help, -h      Show this help
+`.trim(),
+
+  update: `
+forge tasks update — modify task fields
+
+Usage: forge tasks update <task-id> [options]
+
+Arguments:
+  task-id         The task to update (looked up across all features)
+
+Options:
+  --status <s>           New status: open, in_progress (use 'close' for closed)
+  --priority <0-4>       Priority level
+  --title <text>         New title
+  -d, --description <t>  Description
+  --design <text>        Design notes
+  --notes <text>         Implementation notes
+  --acceptance, -a <txt>  Append acceptance criterion (repeatable)
+  --label, -l <label>    Append label (repeatable, idempotent)
+  --json                 Output as JSON
+  --help, -h             Show this help
+
+Note: To close a task, use 'forge tasks close <id>' instead.
+`.trim(),
+
+  close: `
+forge tasks close — close a task
+
+Usage: forge tasks close <task-id> [options]
+
+Arguments:
+  task-id         The task to close (looked up across all features)
+
+Options:
+  --reason <text>  Reason for closing (default: "completed")
+  --force          Override dependency validation for in_progress deps
+  --json           Output as JSON
+  --help, -h       Show this help
+`.trim(),
+
+  comment: `
+forge tasks comment — add a comment to a task
+
+Usage: forge tasks comment <task-id> "message"
+
+Arguments:
+  task-id         The task to comment on
+  message         Comment text (quoted string)
+
+Options:
+  --json          Output as JSON
+  --help, -h      Show this help
+`.trim(),
+
+  label: `
+forge tasks label — add a label to a task
+
+Usage: forge tasks label <task-id> <label>
+
+Arguments:
+  task-id         The task to label
+  label           Label string to add (idempotent)
+
+Options:
+  --json          Output as JSON
+  --help, -h      Show this help
+`.trim(),
+
+  dep: `
+forge tasks dep — manage task dependencies
+
+Usage: forge tasks dep add <blocked-id> <blocker-id>
+       forge tasks dep remove <blocked-id> <blocker-id>
+
+Arguments:
+  blocked-id      The task that is/will be blocked
+  blocker-id      The task that blocks it
+
+Options:
+  --json          Output as JSON
+  --help, -h      Show this help
+`.trim(),
+
+  validate: `
+forge tasks validate — check DAG integrity
+
+Usage: forge tasks validate [feature|--project] [options]
+
+Arguments:
+  feature         Validate a specific feature (omit to validate all)
+
+Options:
+  --project       Validate project-level tasks only
+  --json          Output as JSON
+  --help, -h      Show this help
+`.trim(),
+};
 
 /** Extract positional args by skipping flags and their values. */
 function extractPositional(args: string[]): string[] {
@@ -97,9 +300,27 @@ export async function tasks(args: string[]): Promise<void> {
 }
 
 async function tasksInner(args: string[], json: boolean, project: boolean): Promise<void> {
+  const help = args.includes("--help") || args.includes("-h");
   const positional = extractPositional(args);
 
   const subcommand = positional[0];
+
+  // forge tasks --help  OR  forge tasks (no args, no --project)
+  if (help && (!subcommand || !RESERVED.includes(subcommand))) {
+    console.log(TASKS_HELP);
+    return;
+  }
+  if (!subcommand && !project) {
+    console.log(TASKS_HELP);
+    return;
+  }
+
+  // forge tasks <subcommand> --help
+  if (help && subcommand && subcommand in SUBCOMMAND_HELP) {
+    console.log(SUBCOMMAND_HELP[subcommand]);
+    return;
+  }
+
   const cwd = process.cwd();
 
   try {
@@ -140,7 +361,7 @@ async function handleScaffold(
   const feature = project ? null : positional[0] || null;
 
   if (!project && !feature) {
-    fail("Usage: forge tasks <feature-name> or forge tasks --project");
+    fail("Usage: forge tasks <feature-name> or forge tasks --project\nRun 'forge tasks --help' to see all subcommands.");
   }
 
   if (!project && feature) {
@@ -294,11 +515,11 @@ async function handleDep(positional: string[], json: boolean, cwd: string): Prom
   const blockerId = positional[3];
 
   if (!action || !["add", "remove"].includes(action)) {
-    fail("Usage: forge tasks dep add|remove <blocked> <blocker>");
+    fail("Usage: forge tasks dep add|remove <blocked-id> <blocker-id>");
   }
 
   if (!blockedId || !blockerId) {
-    fail("Both blocked and blocker task IDs are required.");
+    fail("Usage: forge tasks dep add|remove <blocked-id> <blocker-id>\nBoth blocked and blocker task IDs are required.");
   }
 
   try {
@@ -341,9 +562,15 @@ async function handleClose(positional: string[], json: boolean, args: string[], 
 
 async function handleUpdate(args: string[], positional: string[], json: boolean, cwd: string): Promise<void> {
   const id = positional[1];
-  if (!id) fail("Usage: forge tasks update <id> [--status <s>] [--priority <n>] [--title ...] [-d ...] [--design ...] [--notes ...]");
+  if (!id) fail("Usage: forge tasks update <task-id> [options]\nRun 'forge tasks update --help' for all options.");
 
-  const fields: Partial<Pick<Task, "status" | "priority" | "title" | "description" | "design" | "notes">> = {};
+  const fields: Partial<Pick<Task, "status" | "priority" | "title" | "description" | "design" | "notes">> & {
+    addAcceptance?: string[];
+    addLabels?: string[];
+  } = {};
+
+  const acceptance: string[] = [];
+  const labels: string[] = [];
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
@@ -355,7 +582,7 @@ async function handleUpdate(args: string[], positional: string[], json: boolean,
       fields.status = next as TaskStatus;
       i++;
     }
-    else if (arg === "--priority" && next) {
+    else if ((arg === "--priority" || arg === "-p") && next) {
       const parsed = parseInt(next, 10);
       if (isNaN(parsed) || parsed < 0 || parsed > 4) {
         fail(`Invalid priority "${next}". Must be a number between 0 and 4.`);
@@ -366,10 +593,20 @@ async function handleUpdate(args: string[], positional: string[], json: boolean,
     else if ((arg === "-d" || arg === "--description") && next) { fields.description = next; i++; }
     else if (arg === "--design" && next) { fields.design = next; i++; }
     else if (arg === "--notes" && next) { fields.notes = next; i++; }
+    else if ((arg === "--acceptance" || arg === "-a") && next) { acceptance.push(next); i++; }
+    else if ((arg === "--label" || arg === "-l") && next) { labels.push(next); i++; }
   }
 
+  if (acceptance.length > 0) fields.addAcceptance = acceptance;
+  if (labels.length > 0) fields.addLabels = labels;
+
   if (Object.keys(fields).length === 0) {
-    fail("No fields to update. Use --status, --priority, --title, -d, --design, or --notes.");
+    fail(
+      "No fields to update. Available flags:\n" +
+      "  --status, --priority/-p, --title, -d/--description,\n" +
+      "  --design, --notes, --acceptance/-a, --label/-l\n" +
+      "See also: forge tasks close, forge tasks comment, forge tasks dep"
+    );
   }
 
   try {
@@ -505,7 +742,7 @@ function outputTaskList(data: TasksFile, json: boolean): void {
 
 async function handleShow(positional: string[], json: boolean, cwd: string): Promise<void> {
   const taskId = positional[1];
-  if (!taskId) fail("Usage: forge tasks show <task-id>");
+  if (!taskId) fail("Usage: forge tasks show <task-id> [--json]");
 
   const files = discoverTaskFiles(cwd);
   for (const filePath of files) {
@@ -554,7 +791,7 @@ async function handleShow(positional: string[], json: boolean, cwd: string): Pro
     }
   }
 
-  fail(`Task "${taskId}" not found.`);
+  fail(`Task "${taskId}" not found. Usage: forge tasks show <task-id> [--json]`);
 }
 
 // ── Ready handler ───────────────────────────────────────

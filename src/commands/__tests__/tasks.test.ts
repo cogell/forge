@@ -586,4 +586,166 @@ describe("forge tasks CLI", () => {
     expect(exitSpy).toHaveBeenCalledWith(1);
     expect(errorSpy.mock.calls.some((c: string[]) => c[0]?.includes("Available: create"))).toBe(true);
   });
+
+  // ── Help system (#1, #2, #5) ─────────────────────────────────
+
+  it("--help prints tasks overview", async () => {
+    await tasks(["--help"]);
+    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("forge tasks — task management"));
+    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("Subcommands:"));
+    expect(exitSpy).not.toHaveBeenCalled();
+  });
+
+  it("-h prints tasks overview", async () => {
+    await tasks(["-h"]);
+    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("forge tasks — task management"));
+  });
+
+  it("bare 'forge tasks' (no args) prints tasks overview", async () => {
+    await tasks([]);
+    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("forge tasks — task management"));
+    expect(exitSpy).not.toHaveBeenCalled();
+  });
+
+  it("create --help prints create usage", async () => {
+    await tasks(["create", "--help"]);
+    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("forge tasks create"));
+    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("--acceptance"));
+    expect(exitSpy).not.toHaveBeenCalled();
+  });
+
+  it("update --help prints update usage", async () => {
+    await tasks(["update", "--help"]);
+    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("forge tasks update"));
+    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("--acceptance"));
+    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("--label"));
+    expect(exitSpy).not.toHaveBeenCalled();
+  });
+
+  it("show --help prints show usage", async () => {
+    await tasks(["show", "--help"]);
+    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("forge tasks show"));
+    expect(exitSpy).not.toHaveBeenCalled();
+  });
+
+  it("close --help prints close usage", async () => {
+    await tasks(["close", "-h"]);
+    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("forge tasks close"));
+    expect(exitSpy).not.toHaveBeenCalled();
+  });
+
+  it("dep --help prints dep usage", async () => {
+    await tasks(["dep", "--help"]);
+    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("forge tasks dep"));
+    expect(exitSpy).not.toHaveBeenCalled();
+  });
+
+  it("list --help prints list usage", async () => {
+    await tasks(["list", "--help"]);
+    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("forge tasks list"));
+    expect(exitSpy).not.toHaveBeenCalled();
+  });
+
+  it("epic --help prints epic usage", async () => {
+    await tasks(["epic", "--help"]);
+    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("forge tasks epic"));
+    expect(exitSpy).not.toHaveBeenCalled();
+  });
+
+  // ── Update with --acceptance and --label (#3) ────────────────
+
+  it("update appends acceptance criteria", async () => {
+    const tasksData: TasksFile = {
+      version: 1,
+      epics: [{ id: "TEST-1", title: "P1", created: "2026-03-30" }],
+      tasks: [
+        { id: "TEST-1.1", title: "T", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: ["Existing"], notes: "", dependencies: [], comments: [], closeReason: null },
+      ],
+    };
+    setupFeature(tmp, "auth", tasksData);
+    await tasks(["update", "TEST-1.1", "--acceptance", "New criterion", "-a", "Another one"]);
+
+    const data = readJson(join(tmp, "plans", "auth", TASKS_FILENAME));
+    expect(data.tasks[0].acceptance).toEqual(["Existing", "New criterion", "Another one"]);
+  });
+
+  it("update appends labels (idempotent)", async () => {
+    const tasksData: TasksFile = {
+      version: 1,
+      epics: [{ id: "TEST-1", title: "P1", created: "2026-03-30" }],
+      tasks: [
+        { id: "TEST-1.1", title: "T", status: "open", priority: 2, labels: ["existing"], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: null },
+      ],
+    };
+    setupFeature(tmp, "auth", tasksData);
+    await tasks(["update", "TEST-1.1", "--label", "new-label", "-l", "existing"]);
+
+    const data = readJson(join(tmp, "plans", "auth", TASKS_FILENAME));
+    expect(data.tasks[0].labels).toEqual(["existing", "new-label"]);
+  });
+
+  it("update with only --acceptance counts as having fields", async () => {
+    const tasksData: TasksFile = {
+      version: 1,
+      epics: [{ id: "TEST-1", title: "P1", created: "2026-03-30" }],
+      tasks: [
+        { id: "TEST-1.1", title: "T", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: null },
+      ],
+    };
+    setupFeature(tmp, "auth", tasksData);
+    await tasks(["update", "TEST-1.1", "-a", "Works correctly"]);
+
+    const data = readJson(join(tmp, "plans", "auth", TASKS_FILENAME));
+    expect(data.tasks[0].acceptance).toEqual(["Works correctly"]);
+  });
+
+  // ── Improved error messages (#4) ─────────────────────────────
+
+  it("show not-found error includes usage hint", async () => {
+    const tasksData: TasksFile = {
+      version: 1,
+      epics: [{ id: "TEST-1", title: "P1", created: "2026-03-30" }],
+      tasks: [
+        { id: "TEST-1.1", title: "A", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: null },
+      ],
+    };
+    setupFeature(tmp, "auth", tasksData);
+
+    try { await tasks(["show", "auth"]); } catch {}
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    expect(errorSpy.mock.calls.some((c: string[]) => c[0]?.includes("Usage: forge tasks show <task-id>"))).toBe(true);
+  });
+
+  it("update no-fields error lists all available flags", async () => {
+    const tasksData: TasksFile = {
+      version: 1,
+      epics: [{ id: "TEST-1", title: "P1", created: "2026-03-30" }],
+      tasks: [
+        { id: "TEST-1.1", title: "T", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: null },
+      ],
+    };
+    setupFeature(tmp, "auth", tasksData);
+
+    try { await tasks(["update", "TEST-1.1"]); } catch {}
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    const errorMsg = errorSpy.mock.calls.map((c: string[]) => c[0]).join(" ");
+    expect(errorMsg).toContain("--acceptance");
+    expect(errorMsg).toContain("--label");
+    expect(errorMsg).toContain("forge tasks close");
+  });
+
+  it("update -p short flag works for priority", async () => {
+    const tasksData: TasksFile = {
+      version: 1,
+      epics: [{ id: "TEST-1", title: "P1", created: "2026-03-30" }],
+      tasks: [
+        { id: "TEST-1.1", title: "T", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: null },
+      ],
+    };
+    setupFeature(tmp, "auth", tasksData);
+    await tasks(["update", "TEST-1.1", "-p", "0"]);
+
+    const data = readJson(join(tmp, "plans", "auth", TASKS_FILENAME));
+    expect(data.tasks[0].priority).toBe(0);
+  });
 });

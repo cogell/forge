@@ -327,7 +327,10 @@ function checkAutoClose(data: TasksFile, taskId: string): void {
  */
 export async function updateTask(
   id: string,
-  fields: Partial<Pick<Task, "status" | "priority" | "title" | "description" | "design" | "notes">>,
+  fields: Partial<Pick<Task, "status" | "priority" | "title" | "description" | "design" | "notes">> & {
+    addAcceptance?: string[];
+    addLabels?: string[];
+  },
   cwd?: string
 ): Promise<void> {
   if (fields.status === "closed") {
@@ -347,6 +350,14 @@ export async function updateTask(
     if (fields.description !== undefined) task.description = fields.description;
     if (fields.design !== undefined) task.design = fields.design;
     if (fields.notes !== undefined) task.notes = fields.notes;
+    if (fields.addAcceptance) {
+      for (const ac of fields.addAcceptance) task.acceptance.push(ac);
+    }
+    if (fields.addLabels) {
+      for (const lbl of fields.addLabels) {
+        if (!task.labels.includes(lbl)) task.labels.push(lbl);
+      }
+    }
 
     if (task.status === "open") task.closeReason = null;
 

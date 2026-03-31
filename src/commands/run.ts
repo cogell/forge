@@ -24,7 +24,7 @@ export async function run(args: string[]): Promise<void> {
   const prdFile = join(cwd, "plans", feature, "prd.md");
   const planFile = join(cwd, "plans", feature, "plan.md");
 
-  // Check forge.json exists (replaces bd availability check)
+  // Check forge.json exists
   let forgeConfigured = false;
   try {
     readProjectPrefix(cwd);
