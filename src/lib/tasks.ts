@@ -90,12 +90,30 @@ const PREFIX_REGEX = /^[A-Z0-9]{2,10}$/;
 // ─── Path Resolution ────────────────────────────────────────────────
 
 /**
+ * Validate that a feature name doesn't contain path traversal sequences.
+ */
+function validateFeatureName(feature: string): void {
+  if (
+    feature.includes("..") ||
+    feature.startsWith("/") ||
+    feature.startsWith("\\")
+  ) {
+    throw new Error(
+      `Invalid feature name "${feature}": must not contain path traversal sequences`
+    );
+  }
+}
+
+/**
  * Resolve the path to a tasks.json, anchored to the repo root.
  * When feature is null, resolves to project-level plans/tasks.json.
  */
 export function resolveTasksPath(feature: string | null, cwd?: string): string {
   const root = resolveRepoRoot(cwd);
-  if (feature) return join(root, "plans", feature, TASKS_FILENAME);
+  if (feature) {
+    validateFeatureName(feature);
+    return join(root, "plans", feature, TASKS_FILENAME);
+  }
   return join(root, "plans", TASKS_FILENAME);
 }
 
@@ -187,7 +205,8 @@ function discoverTaskFilesFromRoot(root: string): string[] {
  * Read and parse a tasks.json file.
  *
  * Returns null if the file does not exist.
- * Throws a descriptive error if the file exists but contains invalid JSON.
+ * Throws a descriptive error if the file exists but contains invalid JSON
+ * or does not match the expected schema shape.
  */
 export function readTasksFile(filePath: string): TasksFile | null {
   let raw: string;
@@ -198,13 +217,27 @@ export function readTasksFile(filePath: string): TasksFile | null {
     throw err;
   }
 
+  let data: unknown;
   try {
-    return JSON.parse(raw) as TasksFile;
+    data = JSON.parse(raw);
   } catch (cause) {
     throw new Error(
       `Failed to parse ${filePath}: ${cause instanceof Error ? cause.message : String(cause)}`
     );
   }
+
+  if (
+    typeof data !== "object" ||
+    data === null ||
+    !Array.isArray((data as Record<string, unknown>).epics) ||
+    !Array.isArray((data as Record<string, unknown>).tasks)
+  ) {
+    throw new Error(
+      `Invalid tasks.json schema in ${filePath}: expected object with "epics" and "tasks" arrays`
+    );
+  }
+
+  return data as TasksFile;
 }
 
 // ─── Query Functions ─────────────────────────────────────────────────
@@ -218,6 +251,7 @@ export function readTasksFile(filePath: string): TasksFile | null {
  * Returns null when the file is missing or has no tasks (empty scaffold).
  */
 export function queryFeatureTasks(feature: string, cwd?: string): EpicInfo | null {
+  validateFeatureName(feature);
   const root = resolveRepoRoot(cwd);
   const filePath = join(root, "plans", feature, TASKS_FILENAME);
   const file = readTasksFile(filePath);
@@ -310,12 +344,20 @@ export function getReadyTasks(cwd?: string, feature?: string): ReadyTask[] {
     statusMap.set(task.id, task.status);
   }
 
-  // Build container set in O(n log n) via sorted IDs instead of O(n^2) nested loop
+  // Build container set: a task is a container if any other task's ID
+  // starts with its ID + "." (meaning it has children).
+  const allIds = new Set(allTasks.map((t) => t.id));
   const containerSet = new Set<string>();
-  const sortedIds = allTasks.map((t) => t.id).sort();
-  for (let i = 0; i < sortedIds.length - 1; i++) {
-    if (sortedIds[i + 1].startsWith(sortedIds[i] + ".")) {
-      containerSet.add(sortedIds[i]);
+  for (const id of allIds) {
+    // Walk up the ID to mark all ancestors as containers.
+    // e.g., FORGE-1.2.3 marks FORGE-1.2 and FORGE-1 (if they exist as tasks)
+    const dashIdx = id.indexOf("-");
+    if (dashIdx === -1) continue;
+    const parts = id.substring(dashIdx + 1).split(".");
+    const prefix = id.substring(0, dashIdx);
+    for (let i = 1; i < parts.length; i++) {
+      const ancestorId = `${prefix}-${parts.slice(0, i).join(".")}`;
+      if (allIds.has(ancestorId)) containerSet.add(ancestorId);
     }
   }
 
@@ -474,9 +516,10 @@ export async function createEpic(feature: string | null, title: string, cwd?: st
   const featureDir = feature ? join(plansDir, feature) : plansDir;
   const filePath = join(featureDir, TASKS_FILENAME);
 
-  // Project-level lock serializes epic ID allocation globally.
-  // Per-file lock inside protects the feature's tasks.json from
-  // concurrent writes (e.g., updateTask on the same file).
+  // Lock ordering: .epic-lock THEN per-file lock. All code that
+  // acquires both must follow this order to avoid deadlocks.
+  // Currently only createEpic acquires .epic-lock; other write
+  // functions only acquire per-file locks.
   return withLock(epicLockPath, async () => {
     const files = discoverTaskFilesFromRoot(root);
     const epicPattern = new RegExp(`^${prefix}-(\\d+)$`);
@@ -599,6 +642,11 @@ export async function createTask(
 
 /**
  * Add a dependency: blockedId is blocked by blockerId.
+ *
+ * Note: blocker existence is validated before acquiring the per-file lock.
+ * A concurrent deletion between validation and the locked write could create
+ * a dangling reference. Run `forge tasks validate` after parallel operations
+ * to catch any such inconsistencies.
  */
 export async function addDep(blockedId: string, blockerId: string, cwd?: string): Promise<void> {
   const root = resolveRepoRoot(cwd);
@@ -756,7 +804,7 @@ export async function updateTask(
   cwd?: string
 ): Promise<void> {
   if (fields.status === "closed") {
-    throw new Error(`Cannot set status to "closed" via update. Use closeTask (forge tasks close) instead.`);
+    throw new Error(`Cannot set status to "closed" via update. Use "forge tasks close <id>" instead.`);
   }
 
   const root = resolveRepoRoot(cwd);

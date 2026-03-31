@@ -12,43 +12,56 @@ import { join, resolve, dirname } from "path";
 /**
  * Resolve cwd to the main repo root.
  *
- * - If .git is a directory (normal repo), return cwd unchanged.
+ * Walks up from cwd looking for .git. Then:
+ * - If .git is a directory (normal repo), return that directory.
  * - If .git is a file (worktree), parse the gitdir pointer and
  *   follow it back to the main repo root.
- * - If .git is missing, throw an error.
+ * - If .git is not found in any ancestor, throw an error.
  */
 export function resolveRepoRoot(cwd?: string): string {
-  const dir = resolve(cwd ?? process.cwd());
-  const gitPath = join(dir, ".git");
+  const startDir = resolve(cwd ?? process.cwd());
+  let dir = startDir;
 
-  let stat;
-  try {
-    stat = lstatSync(gitPath);
-  } catch {
-    throw new Error(`.git not found in ${dir}`);
-  }
+  // Walk up the directory tree to find .git
+  while (true) {
+    const gitPath = join(dir, ".git");
 
-  // Normal repo — .git is a directory
-  if (stat.isDirectory()) {
-    return dir;
-  }
-
-  // Worktree — .git is a file with content like:
-  //   gitdir: /path/to/main-repo/.git/worktrees/branch-name
-  if (stat.isFile()) {
-    const content = readFileSync(gitPath, "utf-8").trim();
-    const match = content.match(/^gitdir:\s*(.+)$/);
-    if (!match) {
-      throw new Error(`Unable to parse .git file in ${dir}: ${content}`);
+    let stat;
+    try {
+      stat = lstatSync(gitPath);
+    } catch {
+      // .git not found at this level — try parent
+      const parent = dirname(dir);
+      if (parent === dir) {
+        // Reached filesystem root without finding .git
+        throw new Error(`.git not found in ${startDir} or any parent directory`);
+      }
+      dir = parent;
+      continue;
     }
 
-    const gitdirPath = resolve(dir, match[1]);
+    // Normal repo — .git is a directory
+    if (stat.isDirectory()) {
+      return dir;
+    }
 
-    // gitdirPath is e.g. /path/to/main-repo/.git/worktrees/branch-name
-    // Go up 3 levels: worktrees/branch-name → .git → repo-root
-    const mainRepoRoot = dirname(dirname(dirname(gitdirPath)));
-    return mainRepoRoot;
+    // Worktree — .git is a file with content like:
+    //   gitdir: /path/to/main-repo/.git/worktrees/branch-name
+    if (stat.isFile()) {
+      const content = readFileSync(gitPath, "utf-8").trim();
+      const match = content.match(/^gitdir:\s*(.+)$/);
+      if (!match) {
+        throw new Error(`Unable to parse .git file in ${dir}: ${content}`);
+      }
+
+      const gitdirPath = resolve(dir, match[1]);
+
+      // gitdirPath is e.g. /path/to/main-repo/.git/worktrees/branch-name
+      // Go up 3 levels: worktrees/branch-name → .git → repo-root
+      const mainRepoRoot = dirname(dirname(dirname(gitdirPath)));
+      return mainRepoRoot;
+    }
+
+    throw new Error(`.git exists but is neither a file nor a directory in ${dir}`);
   }
-
-  throw new Error(`.git exists but is neither a file nor a directory in ${dir}`);
 }

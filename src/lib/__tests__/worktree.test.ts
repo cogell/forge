@@ -37,25 +37,50 @@ describe("resolveRepoRoot", () => {
     expect(result).toBe(mainRepo);
   });
 
-  it("works with nested worktree paths (subdirectory of worktree)", () => {
+  it("works from worktree root", () => {
     // Set up a fake main repo
     const mainRepo = join(tempDir, "main-repo");
     mkdirSync(join(mainRepo, ".git", "worktrees", "feature-x"), { recursive: true });
 
     // Set up a worktree directory with .git file
     const worktreeDir = join(tempDir, "worktree-checkout");
+    mkdirSync(worktreeDir, { recursive: true });
+    const gitdirPath = join(mainRepo, ".git", "worktrees", "feature-x");
+    writeFileSync(join(worktreeDir, ".git"), `gitdir: ${gitdirPath}\n`);
+
+    const result = resolveRepoRoot(worktreeDir);
+    expect(result).toBe(mainRepo);
+  });
+
+  it("walks up from subdirectory within a worktree to find .git file", () => {
+    // Set up a fake main repo
+    const mainRepo = join(tempDir, "main-repo");
+    mkdirSync(join(mainRepo, ".git", "worktrees", "feature-x"), { recursive: true });
+
+    // Set up a worktree directory with .git file at root
+    const worktreeDir = join(tempDir, "worktree-checkout");
     const nestedDir = join(worktreeDir, "src", "lib");
     mkdirSync(nestedDir, { recursive: true });
     const gitdirPath = join(mainRepo, ".git", "worktrees", "feature-x");
     writeFileSync(join(worktreeDir, ".git"), `gitdir: ${gitdirPath}\n`);
 
-    // Call from the worktree root (where .git file is), not from nested
-    const result = resolveRepoRoot(worktreeDir);
+    // Call from deeply nested subdirectory — should walk up to find .git
+    const result = resolveRepoRoot(nestedDir);
     expect(result).toBe(mainRepo);
   });
 
-  it("throws a clear error if .git is missing entirely", () => {
-    // tempDir has no .git file or directory
+  it("walks up from subdirectory of a normal repo to find .git directory", () => {
+    const repoDir = join(tempDir, "repo");
+    mkdirSync(join(repoDir, ".git"), { recursive: true });
+    const nested = join(repoDir, "src", "components");
+    mkdirSync(nested, { recursive: true });
+
+    const result = resolveRepoRoot(nested);
+    expect(result).toBe(repoDir);
+  });
+
+  it("throws a clear error if .git is missing in all ancestors", () => {
+    // tempDir has no .git file or directory, and tmpdir root won't either
     expect(() => resolveRepoRoot(tempDir)).toThrow(/\.git not found/i);
   });
 

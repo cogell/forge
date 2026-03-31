@@ -1117,12 +1117,12 @@ describe("updateTask", () => {
     expect(data.tasks[0].closeReason).toBeNull();
   });
 
-  it("update --status closed is rejected (must use closeTask)", async () => {
+  it("update --status closed is rejected (must use forge tasks close)", async () => {
     const tasks: Task[] = [
       { id: "FORGE-1.1", title: "T", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: null },
     ];
     setupFeature(tmpDir, "auth", { version: 1, epics: [{ id: "FORGE-1", title: "Auth", created: "2026-03-30" }], tasks });
-    expect(updateTask("FORGE-1.1", { status: "closed" }, tmpDir)).rejects.toThrow(/closeTask/);
+    expect(updateTask("FORGE-1.1", { status: "closed" }, tmpDir)).rejects.toThrow(/forge tasks close/);
   });
 
   it("updates title, priority, description, design, notes", async () => {
@@ -1528,5 +1528,113 @@ describe("closeTask cross-file force", () => {
     setupFeature(tmpDir, "pipeline", { version: 1, epics: [{ id: "FORGE-2", title: "Pipe", created: "2026-03-30" }], tasks: pipeTasks });
 
     expect(closeTask("FORGE-2.1", { force: true }, tmpDir)).rejects.toThrow(/still open/);
+  });
+});
+
+// ─── readTasksFile schema validation ──────────────────────────────────
+
+describe("readTasksFile schema validation", () => {
+  let tmpDir: string;
+
+  beforeEach(() => { tmpDir = makeTmpDir(); });
+  afterEach(() => { rmSync(tmpDir, { recursive: true, force: true }); });
+
+  it("throws on valid JSON that lacks epics/tasks arrays", () => {
+    const filePath = join(tmpDir, "tasks.json");
+    writeFileSync(filePath, JSON.stringify({ foo: "bar" }));
+    expect(() => readTasksFile(filePath)).toThrow(/Invalid tasks\.json schema/);
+  });
+
+  it("throws when epics is not an array", () => {
+    const filePath = join(tmpDir, "tasks.json");
+    writeFileSync(filePath, JSON.stringify({ epics: "not-array", tasks: [] }));
+    expect(() => readTasksFile(filePath)).toThrow(/Invalid tasks\.json schema/);
+  });
+
+  it("throws when tasks is not an array", () => {
+    const filePath = join(tmpDir, "tasks.json");
+    writeFileSync(filePath, JSON.stringify({ epics: [], tasks: "not-array" }));
+    expect(() => readTasksFile(filePath)).toThrow(/Invalid tasks\.json schema/);
+  });
+
+  it("accepts valid minimal schema", () => {
+    const filePath = join(tmpDir, "tasks.json");
+    writeFileSync(filePath, JSON.stringify({ version: 1, epics: [], tasks: [] }));
+    const result = readTasksFile(filePath);
+    expect(result).not.toBeNull();
+    expect(result!.epics).toEqual([]);
+    expect(result!.tasks).toEqual([]);
+  });
+});
+
+// ─── Feature name path traversal protection ───────────────────────────
+
+describe("path traversal protection", () => {
+  let tmpDir: string;
+
+  beforeEach(() => { tmpDir = makeTmpDir(); mkdirSync(join(tmpDir, ".git"), { recursive: true }); });
+  afterEach(() => { rmSync(tmpDir, { recursive: true, force: true }); });
+
+  it("rejects feature names with ..", () => {
+    expect(() => resolveTasksPath("../../etc", tmpDir)).toThrow(/path traversal/);
+  });
+
+  it("rejects feature names starting with /", () => {
+    expect(() => resolveTasksPath("/etc/passwd", tmpDir)).toThrow(/path traversal/);
+  });
+
+  it("rejects feature names starting with \\", () => {
+    expect(() => resolveTasksPath("\\windows", tmpDir)).toThrow(/path traversal/);
+  });
+
+  it("accepts normal feature names with hyphens", () => {
+    expect(resolveTasksPath("my-feature", tmpDir)).toContain("plans/my-feature/tasks.json");
+  });
+
+  it("queryFeatureTasks rejects traversal", () => {
+    setupProject(tmpDir, "FORGE");
+    expect(() => queryFeatureTasks("../../../etc", tmpDir)).toThrow(/path traversal/);
+  });
+});
+
+// ─── removeDep with nonexistent blocked task ──────────────────────────
+
+describe("removeDep nonexistent blocked task", () => {
+  let tmpDir: string;
+
+  beforeEach(() => { tmpDir = makeTmpDir(); setupProject(tmpDir, "FORGE"); });
+  afterEach(() => { rmSync(tmpDir, { recursive: true, force: true }); });
+
+  it("throws when blocked task ID does not exist", async () => {
+    const tasks: Task[] = [
+      { id: "FORGE-1.1", title: "A", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: null },
+    ];
+    setupFeature(tmpDir, "auth", { version: 1, epics: [{ id: "FORGE-1", title: "Auth", created: "2026-03-30" }], tasks });
+    expect(removeDep("FORGE-999.1", "FORGE-1.1", tmpDir)).rejects.toThrow(/not found/);
+  });
+});
+
+// ─── createTask project-level (feature = null) ────────────────────────
+
+describe("createTask project-level", () => {
+  let tmpDir: string;
+
+  beforeEach(() => { tmpDir = makeTmpDir(); setupProject(tmpDir, "FORGE"); });
+  afterEach(() => { rmSync(tmpDir, { recursive: true, force: true }); });
+
+  it("creates task under project-level epic", async () => {
+    // Scaffold project-level tasks.json
+    mkdirSync(join(tmpDir, "plans"), { recursive: true });
+    writeFileSync(join(tmpDir, "plans", TASKS_FILENAME), JSON.stringify({
+      version: 1,
+      epics: [{ id: "FORGE-1", title: "Project Epic", created: "2026-03-30" }],
+      tasks: [],
+    }, null, 2) + "\n");
+
+    const id = await createTask(null, "Project task", "FORGE-1", {}, tmpDir);
+    expect(id).toBe("FORGE-1.1");
+    const data = readJson(join(tmpDir, "plans", TASKS_FILENAME));
+    expect(data.tasks).toHaveLength(1);
+    expect(data.tasks[0].title).toBe("Project task");
   });
 });

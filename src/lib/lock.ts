@@ -1,4 +1,5 @@
-import { writeFileSync, readFileSync, unlinkSync } from "fs";
+import { writeFileSync, readFileSync, unlinkSync, renameSync } from "fs";
+import { join, dirname } from "path";
 
 /** Default lock timeout in milliseconds */
 export const LOCK_TIMEOUT_MS = 5000;
@@ -76,11 +77,19 @@ export async function acquireLock(
       }
 
       if (isNaN(existingPid) || !isPidAlive(existingPid)) {
-        // Stale lock — reclaim it
+        // Stale lock — atomically reclaim via rename instead of
+        // unlink+create (which has a TOCTOU race window).
+        const tmpLock = join(
+          dirname(lockFile),
+          `.lock-reclaim-${process.pid}-${Date.now()}`
+        );
         try {
-          unlinkSync(lockFile);
+          writeFileSync(tmpLock, String(process.pid), { flag: "wx" });
+          renameSync(tmpLock, lockFile);
+          return;
         } catch {
-          // Another process may have already cleaned it up
+          // Another process may have reclaimed first — clean up and retry
+          try { unlinkSync(tmpLock); } catch {}
         }
         continue;
       }

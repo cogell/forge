@@ -162,7 +162,7 @@ async function handleEpic(
 ): Promise<void> {
   const action = positional[1];
   if (action !== "create") {
-    fail(`Unknown epic subcommand: ${action}. Usage: forge tasks epic create <feature|--project> "title"`, json);
+    fail(`Unknown epic subcommand: ${action ?? "(none)"}. Available: create. Usage: forge tasks epic create <feature|--project> "title"`, json);
   }
 
   let feature: string | null;
@@ -221,7 +221,13 @@ async function handleCreate(
     const arg = args[i];
     const next = args[i + 1];
     if (arg === "--parent" && next) { parentId = next; i++; }
-    else if (arg === "--priority" && next) { priority = parseInt(next, 10); i++; }
+    else if (arg === "--priority" && next) {
+      const parsed = parseInt(next, 10);
+      if (isNaN(parsed) || parsed < 0 || parsed > 4) {
+        fail(`Invalid priority "${next}". Must be a number between 0 and 4.`, json);
+      }
+      priority = parsed; i++;
+    }
     else if (arg === "--acceptance" && next) { acceptance.push(next); i++; }
     else if (arg === "--label" && next) { labels.push(next); i++; }
     else if ((arg === "-d" || arg === "--description") && next) { description = next; i++; }
@@ -319,10 +325,19 @@ async function handleUpdate(args: string[], positional: string[], json: boolean,
       if (!VALID_STATUSES.includes(next as TaskStatus)) {
         fail(`Invalid status "${next}". Must be one of: ${VALID_STATUSES.join(", ")}`, json);
       }
+      if (next === "closed") {
+        fail(`Cannot set status to "closed" via update. Use "forge tasks close <id>" instead.`, json);
+      }
       fields.status = next as TaskStatus;
       i++;
     }
-    else if (arg === "--priority" && next) { fields.priority = parseInt(next, 10); i++; }
+    else if (arg === "--priority" && next) {
+      const parsed = parseInt(next, 10);
+      if (isNaN(parsed) || parsed < 0 || parsed > 4) {
+        fail(`Invalid priority "${next}". Must be a number between 0 and 4.`, json);
+      }
+      fields.priority = parsed; i++;
+    }
     else if (arg === "--title" && next) { fields.title = next; i++; }
     else if ((arg === "-d" || arg === "--description") && next) { fields.description = next; i++; }
     else if (arg === "--design" && next) { fields.design = next; i++; }
@@ -517,7 +532,8 @@ async function handleShow(positional: string[], json: boolean, cwd: string): Pro
 // ── Ready handler ───────────────────────────────────────
 
 async function handleReady(positional: string[], json: boolean, cwd: string): Promise<void> {
-  const feature = positional[1];
+  // --project is intentionally ignored: ready always scans all files when no feature specified
+  const feature = positional[1] || undefined;
   const ready = getReadyTasks(cwd, feature);
 
   if (json) { console.log(JSON.stringify(ready, null, 2)); return; }
