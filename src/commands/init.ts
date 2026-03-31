@@ -33,6 +33,15 @@ export async function init(args: string[]): Promise<void> {
     const prefixIdx = args.indexOf("--prefix");
     const prefixArg = prefixIdx !== -1 ? args[prefixIdx + 1] : undefined;
 
+    if (prefixIdx !== -1 && prefixArg === undefined) {
+      if (json) {
+        console.log(JSON.stringify({ error: "missing-prefix-value", message: "Missing value for --prefix." }));
+      } else {
+        console.error("Missing value for --prefix. Usage: forge init --prefix <PREFIX>");
+      }
+      process.exit(1);
+    }
+
     if (prefixArg !== undefined) {
       // Validate prefix from --prefix flag
       if (!isValidPrefix(prefixArg)) {

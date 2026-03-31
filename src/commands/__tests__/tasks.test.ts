@@ -540,6 +540,24 @@ describe("forge tasks CLI", () => {
     expect(errorSpy.mock.calls.some((c: string[]) => c[0]?.includes("forge tasks close"))).toBe(true);
   });
 
+  it("update rejects when no fields provided", async () => {
+    const tasksData: TasksFile = {
+      version: 1,
+      epics: [{ id: "TEST-1", title: "P1", created: "2026-03-30" }],
+      tasks: [
+        { id: "TEST-1.1", title: "T", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: null },
+      ],
+    };
+    setupFeature(tmp, "auth", tasksData);
+
+    try {
+      await tasks(["update", "TEST-1.1"]);
+    } catch {}
+
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    expect(errorSpy.mock.calls.some((c: string[]) => c[0]?.includes("No fields to update"))).toBe(true);
+  });
+
   it("update rejects non-numeric --priority", async () => {
     const tasksData: TasksFile = {
       version: 1,

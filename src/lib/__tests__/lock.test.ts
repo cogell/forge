@@ -104,7 +104,7 @@ describe("lock", () => {
   });
 
   describe("releaseLock", () => {
-    it("removes the lock file", async () => {
+    it("removes the lock file when owned by current process", async () => {
       await acquireLock(testFile);
       const lockFile = testFile + LOCK_EXTENSION;
       expect(existsSync(lockFile)).toBe(true);
@@ -116,6 +116,19 @@ describe("lock", () => {
     it("does not throw if lock file already removed", () => {
       // Should not throw even though no lock file exists
       expect(() => releaseLock(testFile)).not.toThrow();
+    });
+
+    it("does not remove lock file owned by another PID", () => {
+      const lockFile = testFile + LOCK_EXTENSION;
+      // Simulate a lock held by a different process (PID 1 is always alive)
+      writeFileSync(lockFile, "1");
+
+      releaseLock(testFile);
+      // Lock should still exist — we don't own it
+      expect(existsSync(lockFile)).toBe(true);
+
+      // Clean up
+      unlinkSync(lockFile);
     });
   });
 
@@ -156,6 +169,32 @@ describe("lock", () => {
       expect(result).toBe("async-result");
       const lockFile = testFile + LOCK_EXTENSION;
       expect(existsSync(lockFile)).toBe(false);
+    });
+
+    it("serializes concurrent calls (no data corruption)", async () => {
+      // Two concurrent withLock calls should not interleave their critical sections
+      let counter = 0;
+      const results: number[] = [];
+
+      const task = async (id: number) => {
+        return withLock(testFile, async () => {
+          const before = counter;
+          // Simulate some async work
+          await new Promise((resolve) => setTimeout(resolve, 20));
+          counter = before + 1;
+          results.push(id);
+          return counter;
+        });
+      };
+
+      const [r1, r2] = await Promise.all([task(1), task(2)]);
+
+      // Both should have completed
+      expect(results).toHaveLength(2);
+      // Counter should be 2 (no lost updates from interleaving)
+      expect(counter).toBe(2);
+      // Return values should be 1 and 2 (in some order)
+      expect([r1, r2].sort()).toEqual([1, 2]);
     });
   });
 });

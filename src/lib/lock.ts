@@ -108,6 +108,7 @@ export async function acquireLock(
 
 /**
  * Release an advisory file lock.
+ * Only removes the lock if it is owned by the current process (PID matches).
  * Silently ignores ENOENT (lock already removed).
  *
  * @param filePath - The file whose lock should be released
@@ -115,6 +116,12 @@ export async function acquireLock(
 export function releaseLock(filePath: string): void {
   const lockFile = filePath + LOCK_EXTENSION;
   try {
+    const content = readFileSync(lockFile, "utf-8").trim();
+    const lockPid = parseInt(content, 10);
+    if (!isNaN(lockPid) && lockPid !== process.pid) {
+      // Lock is owned by another process — do not release it
+      return;
+    }
     unlinkSync(lockFile);
   } catch (err: unknown) {
     const code = (err as NodeJS.ErrnoException).code;

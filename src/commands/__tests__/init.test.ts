@@ -57,6 +57,23 @@ describe("forge init --prefix", () => {
     expect(existsSync(join(tmp, "docs/decisions/template.md"))).toBe(true);
   });
 
+  it("errors when --prefix is provided without a value", async () => {
+    const { init } = await import("../init");
+    const exitSpy = spyOn(process, "exit").mockImplementation(() => {
+      throw new Error("process.exit called");
+    });
+    const errorSpy = spyOn(console, "error").mockImplementation(() => {});
+
+    try {
+      await init(["--prefix"]);
+    } catch {}
+
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    expect(errorSpy.mock.calls.some((c: string[]) => c[0]?.includes("Missing value for --prefix"))).toBe(true);
+    exitSpy.mockRestore();
+    errorSpy.mockRestore();
+  });
+
   it("rejects invalid prefix (lowercase)", async () => {
     const { init } = await import("../init");
     const exitSpy = spyOn(process, "exit").mockImplementation(() => {

@@ -1576,15 +1576,19 @@ describe("path traversal protection", () => {
   afterEach(() => { rmSync(tmpDir, { recursive: true, force: true }); });
 
   it("rejects feature names with ..", () => {
-    expect(() => resolveTasksPath("../../etc", tmpDir)).toThrow(/path traversal/);
+    expect(() => resolveTasksPath("../../etc", tmpDir)).toThrow(/path separators or traversal/);
   });
 
   it("rejects feature names starting with /", () => {
-    expect(() => resolveTasksPath("/etc/passwd", tmpDir)).toThrow(/path traversal/);
+    expect(() => resolveTasksPath("/etc/passwd", tmpDir)).toThrow(/path separators or traversal/);
   });
 
   it("rejects feature names starting with \\", () => {
-    expect(() => resolveTasksPath("\\windows", tmpDir)).toThrow(/path traversal/);
+    expect(() => resolveTasksPath("\\windows", tmpDir)).toThrow(/path separators or traversal/);
+  });
+
+  it("rejects feature names with embedded slashes", () => {
+    expect(() => resolveTasksPath("foo/bar", tmpDir)).toThrow(/path separators or traversal/);
   });
 
   it("accepts normal feature names with hyphens", () => {
@@ -1593,7 +1597,7 @@ describe("path traversal protection", () => {
 
   it("queryFeatureTasks rejects traversal", () => {
     setupProject(tmpDir, "FORGE");
-    expect(() => queryFeatureTasks("../../../etc", tmpDir)).toThrow(/path traversal/);
+    expect(() => queryFeatureTasks("../../../etc", tmpDir)).toThrow(/path separators or traversal/);
   });
 });
 
@@ -1636,5 +1640,158 @@ describe("createTask project-level", () => {
     const data = readJson(join(tmpDir, "plans", TASKS_FILENAME));
     expect(data.tasks).toHaveLength(1);
     expect(data.tasks[0].title).toBe("Project task");
+  });
+});
+
+// ─── readProjectPrefix error specificity ─────────────────────────────
+
+describe("readProjectPrefix error handling", () => {
+  let tmpDir: string;
+
+  beforeEach(() => { tmpDir = makeTmpDir(); mkdirSync(join(tmpDir, ".git"), { recursive: true }); });
+  afterEach(() => { rmSync(tmpDir, { recursive: true, force: true }); });
+
+  it("throws 'no project key' for missing forge.json", () => {
+    expect(() => readProjectPrefix(tmpDir)).toThrow(/No project key configured/);
+  });
+
+  it("re-throws non-ENOENT errors (e.g., directory instead of file)", () => {
+    // Create forge.json as a directory to trigger EISDIR
+    mkdirSync(join(tmpDir, "forge.json"), { recursive: true });
+    expect(() => readProjectPrefix(tmpDir)).toThrow();
+    try {
+      readProjectPrefix(tmpDir);
+    } catch (err) {
+      // Should NOT say "No project key configured" — should be the actual I/O error
+      expect((err as Error).message).not.toContain("No project key configured");
+    }
+  });
+});
+
+// ─── readTasksFile record validation ─────────────────────────────────
+
+describe("readTasksFile record validation", () => {
+  let tmpDir: string;
+
+  beforeEach(() => { tmpDir = makeTmpDir(); });
+  afterEach(() => { rmSync(tmpDir, { recursive: true, force: true }); });
+
+  it("rejects epic without string id", () => {
+    const filePath = join(tmpDir, "tasks.json");
+    writeFileSync(filePath, JSON.stringify({ version: 1, epics: [42], tasks: [] }));
+    expect(() => readTasksFile(filePath)).toThrow(/Invalid epic at index 0/);
+  });
+
+  it("rejects task without string id", () => {
+    const filePath = join(tmpDir, "tasks.json");
+    writeFileSync(filePath, JSON.stringify({ version: 1, epics: [], tasks: [{ status: "open" }] }));
+    expect(() => readTasksFile(filePath)).toThrow(/missing or non-string "id"/);
+  });
+
+  it("rejects task with invalid status", () => {
+    const filePath = join(tmpDir, "tasks.json");
+    writeFileSync(filePath, JSON.stringify({
+      version: 1,
+      epics: [],
+      tasks: [{ id: "X-1.1", status: "invalid" }],
+    }));
+    expect(() => readTasksFile(filePath)).toThrow(/status must be "open", "in_progress", or "closed"/);
+  });
+
+  it("rejects null task", () => {
+    const filePath = join(tmpDir, "tasks.json");
+    writeFileSync(filePath, JSON.stringify({ version: 1, epics: [], tasks: [null] }));
+    expect(() => readTasksFile(filePath)).toThrow(/Invalid task at index 0/);
+  });
+
+  it("accepts valid records", () => {
+    const filePath = join(tmpDir, "tasks.json");
+    writeFileSync(filePath, JSON.stringify({
+      version: 1,
+      epics: [{ id: "X-1", title: "E", created: "2026-01-01" }],
+      tasks: [{ id: "X-1.1", title: "T", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: null }],
+    }));
+    const result = readTasksFile(filePath);
+    expect(result).not.toBeNull();
+    expect(result!.tasks).toHaveLength(1);
+  });
+});
+
+// ─── getReadyTasks with project-level tasks ──────────────────────────
+
+describe("getReadyTasks includes project-level tasks", () => {
+  let tmpDir: string;
+
+  beforeEach(() => { tmpDir = makeTmpDir(); setupProject(tmpDir, "FORGE"); });
+  afterEach(() => { rmSync(tmpDir, { recursive: true, force: true }); });
+
+  it("returns ready tasks from project-level tasks.json", () => {
+    writeFileSync(join(tmpDir, "plans", TASKS_FILENAME), JSON.stringify({
+      version: 1,
+      epics: [{ id: "FORGE-1", title: "Project Work", created: "2026-03-30" }],
+      tasks: [
+        { id: "FORGE-1.1", title: "Project task", status: "open", priority: 1, labels: ["infra"], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: null },
+      ],
+    }));
+
+    const ready = getReadyTasks(tmpDir);
+    expect(ready.length).toBe(1);
+    expect(ready[0].id).toBe("FORGE-1.1");
+  });
+
+  it("returns ready tasks from both project-level and feature files", () => {
+    // Project-level
+    writeFileSync(join(tmpDir, "plans", TASKS_FILENAME), JSON.stringify({
+      version: 1,
+      epics: [{ id: "FORGE-1", title: "Project Work", created: "2026-03-30" }],
+      tasks: [
+        { id: "FORGE-1.1", title: "Project task", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: null },
+      ],
+    }));
+    // Feature-level
+    const featureDir = join(tmpDir, "plans", "auth");
+    mkdirSync(featureDir, { recursive: true });
+    writeFileSync(join(featureDir, TASKS_FILENAME), JSON.stringify({
+      version: 1,
+      epics: [{ id: "FORGE-2", title: "Auth", created: "2026-03-30" }],
+      tasks: [
+        { id: "FORGE-2.1", title: "Auth task", status: "open", priority: 1, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: null },
+      ],
+    }));
+
+    const ready = getReadyTasks(tmpDir);
+    expect(ready.length).toBe(2);
+    // Should be sorted by priority
+    expect(ready[0].id).toBe("FORGE-2.1"); // priority 1
+    expect(ready[1].id).toBe("FORGE-1.1"); // priority 2
+  });
+});
+
+// ─── getReadyTasks sorts by priority ─────────────────────────────────
+
+describe("getReadyTasks priority sorting", () => {
+  let tmpDir: string;
+
+  beforeEach(() => { tmpDir = makeTmpDir(); setupProject(tmpDir, "FORGE"); });
+  afterEach(() => { rmSync(tmpDir, { recursive: true, force: true }); });
+
+  it("returns tasks sorted by priority ascending (0 = highest)", () => {
+    const featureDir = join(tmpDir, "plans", "auth");
+    mkdirSync(featureDir, { recursive: true });
+    writeFileSync(join(featureDir, TASKS_FILENAME), JSON.stringify({
+      version: 1,
+      epics: [{ id: "FORGE-1", title: "Auth", created: "2026-03-30" }],
+      tasks: [
+        { id: "FORGE-1.1", title: "Low priority", status: "open", priority: 4, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: null },
+        { id: "FORGE-1.2", title: "High priority", status: "open", priority: 0, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: null },
+        { id: "FORGE-1.3", title: "Medium priority", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: null },
+      ],
+    }));
+
+    const ready = getReadyTasks(tmpDir);
+    expect(ready.length).toBe(3);
+    expect(ready[0].priority).toBe(0);
+    expect(ready[1].priority).toBe(2);
+    expect(ready[2].priority).toBe(4);
   });
 });
