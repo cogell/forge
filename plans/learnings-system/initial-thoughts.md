@@ -19,7 +19,7 @@ Where an agent naturally looks during work — these are the only viable places 
 | CLAUDE.md | Always (auto-loaded) | Universal rules |
 | `docs/` files | When researching "how does X work here" | Domain/topic |
 | Code comments | When reading/modifying code | Exact location |
-| Beads task description | When picking up a task | Task-specific |
+| Task description | When picking up a task | Task-specific |
 | Plan files | When starting a new feature in the same area | Feature-scoped |
 
 ## Approaches (Blended)
@@ -90,7 +90,7 @@ Reserve CLAUDE.md for only the highest-signal learnings — things that burned t
 
 Two natural trigger points:
 
-1. **`forge:tasks`** — when decomposing a plan into beads, query the index against each task description. Inject relevant learnings into task descriptions.
+1. **`forge:tasks`** — when decomposing a plan into tasks, query the index against each task description. Inject relevant learnings into task descriptions.
 2. **`forge:run`** — at the start of each phase, query against the phase scope. Surface as a "before you start" context block.
 
 Lightweight addition — a single query before work starts.

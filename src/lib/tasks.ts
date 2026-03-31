@@ -80,6 +80,11 @@ export interface ValidationResult {
   errors: ValidationError[];
 }
 
+export type ValidateScope =
+  | { kind: "all" }
+  | { kind: "project" }
+  | { kind: "feature"; name: string };
+
 const PREFIX_REGEX = /^[A-Z0-9]{2,10}$/;
 
 // ─── Path Resolution ────────────────────────────────────────────────
@@ -742,11 +747,6 @@ function checkAutoClose(data: TasksFile, taskId: string): void {
 /**
  * Update one or more fields on a task.
  * Setting status to "open" clears closeReason.
- * Setting status to "closed" on a container is an error.
- */
-/**
- * Update one or more fields on a task.
- * Setting status to "open" clears closeReason.
  * Setting status to "closed" via update is rejected — use closeTask instead,
  * which enforces dependency validation and triggers auto-close cascade.
  */
@@ -813,38 +813,40 @@ export async function addLabel(id: string, label: string, cwd?: string): Promise
 // ─── DAG Validation ─────────────────────────────────────────────────
 
 /**
- * Validate the task DAG for a feature or the entire project.
+ * Validate the task DAG for a feature, project-level tasks, or everything.
  *
- * When feature is provided, validates only that feature's tasks.json but
+ * When scoped to a feature, validates only that feature's tasks.json but
  * still loads all files for cross-file dependency resolution.
- * When feature is null, validates all task files.
  */
-/**
- * @param feature - feature name to scope validation, "__project__" for project-level only, null for all files
- */
-export function validateDag(feature: string | null, cwd?: string): ValidationResult {
+export function validateDag(scope: ValidateScope, cwd?: string): ValidationResult {
   const root = resolveRepoRoot(cwd);
   const allFiles = discoverTaskFilesFromRoot(root);
   const errors: ValidationError[] = [];
 
   // Determine which files to validate vs which are context-only
   let targetFiles: string[];
-  if (feature === "__project__") {
-    const projectPath = join(root, "plans", TASKS_FILENAME);
-    targetFiles = allFiles.filter((f) => f === projectPath);
-    if (targetFiles.length === 0) {
-      errors.push({ type: "orphan-dep", message: "No project-level tasks.json found at plans/tasks.json", ids: [] });
-      return { valid: false, errors };
+  switch (scope.kind) {
+    case "project": {
+      const projectPath = join(root, "plans", TASKS_FILENAME);
+      targetFiles = allFiles.filter((f) => f === projectPath);
+      if (targetFiles.length === 0) {
+        errors.push({ type: "orphan-dep", message: "No project-level tasks.json found at plans/tasks.json", ids: [] });
+        return { valid: false, errors };
+      }
+      break;
     }
-  } else if (feature) {
-    const featurePath = join(root, "plans", feature, TASKS_FILENAME);
-    targetFiles = allFiles.filter((f) => f === featurePath);
-    if (targetFiles.length === 0) {
-      errors.push({ type: "orphan-dep", message: `No tasks.json found for feature "${feature}"`, ids: [] });
-      return { valid: false, errors };
+    case "feature": {
+      const featurePath = join(root, "plans", scope.name, TASKS_FILENAME);
+      targetFiles = allFiles.filter((f) => f === featurePath);
+      if (targetFiles.length === 0) {
+        errors.push({ type: "orphan-dep", message: `No tasks.json found for feature "${scope.name}"`, ids: [] });
+        return { valid: false, errors };
+      }
+      break;
     }
-  } else {
-    targetFiles = allFiles;
+    case "all":
+      targetFiles = allFiles;
+      break;
   }
 
   // Load all files for cross-file resolution

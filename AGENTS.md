@@ -1,15 +1,6 @@
 # Agent Instructions
 
-This project uses **forge tasks** for issue tracking. Run `forge tasks ready` to find available work.
-
-## Quick Reference
-
-```bash
-forge tasks ready              # Find available work
-forge tasks show <id>          # View issue details
-forge tasks update <id> --status in_progress  # Claim work
-forge tasks close <id>         # Complete work
-```
+This project uses **forge tasks** for issue tracking. Tasks are stored in `plans/<feature>/tasks.json`.
 
 ## Non-Interactive Shell Commands
 
@@ -37,21 +28,15 @@ cp -rf source dest          # NOT: cp -r source dest
 
 ## Task Tracking
 
-This project uses the built-in **forge tasks** system for issue tracking. Tasks are stored in `plans/<feature>/tasks.json`.
-
-### Quick Reference
-
 ```bash
 forge tasks ready              # Find available work
 forge tasks show <id>          # View issue details
 forge tasks update <id> --status in_progress  # Claim work
 forge tasks close <id>         # Complete work
+forge tasks list               # Full task overview
 ```
 
-### Rules
-
 - Use `forge tasks` for ALL task tracking — do NOT use TodoWrite, TaskCreate, or markdown TODO lists
-- Run `forge tasks list` for full task overview
 
 ## Session Completion
 

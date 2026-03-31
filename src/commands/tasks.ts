@@ -25,6 +25,7 @@ import {
   resolveTasksPath,
   SCHEMA_VERSION,
   TASKS_FILENAME,
+  type ValidateScope,
   type TasksFile,
   type Task,
   type TaskStatus,
@@ -38,6 +39,27 @@ const RESERVED = [
 
 const VALID_STATUSES: TaskStatus[] = ["open", "in_progress", "closed"];
 
+/** Flags that consume the next arg as their value. */
+const VALUE_FLAGS = new Set([
+  "--parent", "--priority", "--acceptance", "--label",
+  "-d", "--description", "--design", "--notes",
+  "--status", "--title", "--reason",
+]);
+
+/** Extract positional args by skipping flags and their values. */
+function extractPositional(args: string[]): string[] {
+  const result: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (VALUE_FLAGS.has(arg)) {
+      i++; // skip the flag's value
+    } else if (!arg.startsWith("-")) {
+      result.push(arg);
+    }
+  }
+  return result;
+}
+
 function fail(msg: string, json: boolean): never {
   if (json) console.log(JSON.stringify({ error: msg }));
   else console.error(msg);
@@ -48,9 +70,7 @@ export async function tasks(args: string[]): Promise<void> {
   const json = args.includes("--json");
   const project = args.includes("--project");
 
-  const positional = args.filter(
-    (a) => !a.startsWith("-") || a === "-d"
-  ).filter((a) => a !== "-d");
+  const positional = extractPositional(args);
 
   const subcommand = positional[0];
   const cwd = process.cwd();
@@ -353,8 +373,12 @@ async function handleLabel(positional: string[], json: boolean, cwd: string): Pr
 // ── Validate handler ────────────────────────────────────
 
 async function handleValidate(positional: string[], json: boolean, project: boolean, cwd: string): Promise<void> {
-  const feature = project ? "__project__" : positional[1] || null;
-  const result = validateDag(feature, cwd);
+  const scope: ValidateScope = project
+    ? { kind: "project" }
+    : positional[1]
+      ? { kind: "feature", name: positional[1] }
+      : { kind: "all" };
+  const result = validateDag(scope, cwd);
 
   if (json) {
     console.log(JSON.stringify(result, null, 2));

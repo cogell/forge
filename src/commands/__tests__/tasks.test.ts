@@ -227,4 +227,264 @@ describe("forge tasks CLI", () => {
     // Should output JSON, not create plans/list/tasks.json
     expect(existsSync(join(tmp, "plans", "list", TASKS_FILENAME))).toBe(false);
   });
+
+  // ── extractPositional / flag parsing (#2) ───────────────────────
+
+  it("extractPositional skips value flags and their arguments", async () => {
+    // "create auth 'My task' --parent TEST-1 --priority 1 --label foo"
+    // positional should be: ["create", "auth", "My task"]
+    const tasksData: TasksFile = {
+      version: 1,
+      epics: [{ id: "TEST-1", title: "P1", created: "2026-03-30" }],
+      tasks: [],
+    };
+    setupFeature(tmp, "auth", tasksData);
+
+    await tasks(["create", "auth", "My task", "--parent", "TEST-1", "--priority", "1", "--label", "backend"]);
+    const data = readJson(join(tmp, "plans", "auth", TASKS_FILENAME));
+    expect(data.tasks).toHaveLength(1);
+    expect(data.tasks[0].title).toBe("My task");
+    expect(data.tasks[0].priority).toBe(1);
+    expect(data.tasks[0].labels).toEqual(["backend"]);
+  });
+
+  it("extractPositional handles boolean flags (--json, --force, --project)", async () => {
+    const tasksData: TasksFile = {
+      version: 1,
+      epics: [{ id: "TEST-1", title: "P1", created: "2026-03-30" }],
+      tasks: [
+        { id: "TEST-1.1", title: "A", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: null },
+      ],
+    };
+    setupFeature(tmp, "auth", tasksData);
+    await tasks(["close", "TEST-1.1", "--json", "--force"]);
+
+    const output = logSpy.mock.calls[0][0];
+    const parsed = JSON.parse(output);
+    expect(parsed.status).toBe("closed");
+  });
+
+  // ── handleCreate --parent defaulting (#2) ──────────────────────
+
+  it("create defaults --parent to sole epic", async () => {
+    const tasksData: TasksFile = {
+      version: 1,
+      epics: [{ id: "TEST-1", title: "P1", created: "2026-03-30" }],
+      tasks: [],
+    };
+    setupFeature(tmp, "auth", tasksData);
+
+    // No --parent flag — should default to TEST-1
+    await tasks(["create", "auth", "Auto-parented task"]);
+    const data = readJson(join(tmp, "plans", "auth", TASKS_FILENAME));
+    expect(data.tasks).toHaveLength(1);
+    expect(data.tasks[0].id).toBe("TEST-1.1");
+  });
+
+  it("create errors when no epics exist and no --parent", async () => {
+    const tasksData: TasksFile = { version: 1, epics: [], tasks: [] };
+    setupFeature(tmp, "auth", tasksData);
+
+    try { await tasks(["create", "auth", "Orphan task"]); } catch {}
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("No epics found"));
+  });
+
+  it("create errors when multiple epics and no --parent", async () => {
+    const tasksData: TasksFile = {
+      version: 1,
+      epics: [
+        { id: "TEST-1", title: "P1", created: "2026-03-30" },
+        { id: "TEST-2", title: "P2", created: "2026-03-30" },
+      ],
+      tasks: [],
+    };
+    setupFeature(tmp, "auth", tasksData);
+
+    try { await tasks(["create", "auth", "Ambiguous task"]); } catch {}
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("Multiple epics"));
+  });
+
+  // ── handleEpic CLI wiring (#3) ────────────────────────────────
+
+  it("epic create with feature creates epic and returns ID", async () => {
+    setupFeature(tmp, "auth");
+    // Scaffold first
+    await tasks(["auth"]);
+
+    await tasks(["epic", "create", "auth", "Phase 1: Core"]);
+    const data = readJson(join(tmp, "plans", "auth", TASKS_FILENAME));
+    expect(data.epics).toHaveLength(1);
+    expect(data.epics[0].id).toBe("TEST-1");
+    expect(data.epics[0].title).toBe("Phase 1: Core");
+  });
+
+  it("epic create with --project creates epic in plans/tasks.json", async () => {
+    await tasks(["--project"]);
+
+    await tasks(["epic", "create", "--project", "Global Epic"]);
+    const data = readJson(join(tmp, "plans", TASKS_FILENAME));
+    expect(data.epics).toHaveLength(1);
+    expect(data.epics[0].title).toBe("Global Epic");
+  });
+
+  it("epic create errors on missing title", async () => {
+    setupFeature(tmp, "auth");
+    await tasks(["auth"]);
+
+    try { await tasks(["epic", "create", "auth"]); } catch {}
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("Missing epic title"));
+  });
+
+  it("epic create errors on unknown subcommand", async () => {
+    try { await tasks(["epic", "delete"]); } catch {}
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("Unknown epic subcommand"));
+  });
+
+  // ── handleList all features (#5) ──────────────────────────────
+
+  it("list with no feature aggregates all task files", async () => {
+    const authData: TasksFile = {
+      version: 1,
+      epics: [{ id: "TEST-1", title: "Auth", created: "2026-03-30" }],
+      tasks: [
+        { id: "TEST-1.1", title: "Login", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: null },
+      ],
+    };
+    const pipeData: TasksFile = {
+      version: 1,
+      epics: [{ id: "TEST-2", title: "Pipe", created: "2026-03-30" }],
+      tasks: [
+        { id: "TEST-2.1", title: "Ingest", status: "closed", priority: 1, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: "done" },
+      ],
+    };
+    setupFeature(tmp, "auth", authData);
+    setupFeature(tmp, "pipeline", pipeData);
+
+    await tasks(["list", "--json"]);
+    const output = logSpy.mock.calls[0][0];
+    const parsed = JSON.parse(output);
+    expect(parsed.epics).toHaveLength(2);
+    expect(parsed.tasks).toHaveLength(2);
+  });
+
+  it("list with no features returns empty", async () => {
+    await tasks(["list", "--json"]);
+    const output = logSpy.mock.calls[0][0];
+    const parsed = JSON.parse(output);
+    expect(parsed.tasks).toEqual([]);
+  });
+
+  // ── handleValidate failing case (#6) ──────────────────────────
+
+  it("validate exits 1 and reports errors on invalid DAG", async () => {
+    const tasksData: TasksFile = {
+      version: 1,
+      epics: [{ id: "TEST-1", title: "P1", created: "2026-03-30" }],
+      tasks: [
+        { id: "TEST-1.1", title: "A", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: ["TEST-1.2"], comments: [], closeReason: null },
+        { id: "TEST-1.2", title: "B", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: ["TEST-1.1"], comments: [], closeReason: null },
+      ],
+    };
+    setupFeature(tmp, "auth", tasksData);
+    try { await tasks(["validate", "auth"]); } catch {}
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("error"));
+  });
+
+  it("validate --json returns errors in structured format on invalid DAG", async () => {
+    const tasksData: TasksFile = {
+      version: 1,
+      epics: [{ id: "TEST-1", title: "P1", created: "2026-03-30" }],
+      tasks: [
+        { id: "TEST-1.1", title: "A", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: ["TEST-1.2"], comments: [], closeReason: null },
+        { id: "TEST-1.2", title: "B", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: ["TEST-1.1"], comments: [], closeReason: null },
+      ],
+    };
+    setupFeature(tmp, "auth", tasksData);
+    try { await tasks(["validate", "auth", "--json"]); } catch {}
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    const output = logSpy.mock.calls[0][0];
+    const parsed = JSON.parse(output);
+    expect(parsed.valid).toBe(false);
+    expect(parsed.errors.length).toBeGreaterThan(0);
+  });
+
+  // ── handleComment CLI wiring (#3-adjacent) ────────────────────
+
+  it("comment adds message to task", async () => {
+    const tasksData: TasksFile = {
+      version: 1,
+      epics: [{ id: "TEST-1", title: "P1", created: "2026-03-30" }],
+      tasks: [
+        { id: "TEST-1.1", title: "A", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: null },
+      ],
+    };
+    setupFeature(tmp, "auth", tasksData);
+    await tasks(["comment", "TEST-1.1", "Needs review"]);
+    const data = readJson(join(tmp, "plans", "auth", TASKS_FILENAME));
+    expect(data.tasks[0].comments).toHaveLength(1);
+    expect(data.tasks[0].comments[0].message).toBe("Needs review");
+  });
+
+  // ── handleLabel CLI wiring (#3-adjacent) ──────────────────────
+
+  it("label adds label to task", async () => {
+    const tasksData: TasksFile = {
+      version: 1,
+      epics: [{ id: "TEST-1", title: "P1", created: "2026-03-30" }],
+      tasks: [
+        { id: "TEST-1.1", title: "A", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: null },
+      ],
+    };
+    setupFeature(tmp, "auth", tasksData);
+    await tasks(["label", "TEST-1.1", "needs-human"]);
+    const data = readJson(join(tmp, "plans", "auth", TASKS_FILENAME));
+    expect(data.tasks[0].labels).toEqual(["needs-human"]);
+  });
+
+  // ── handleShow for epic IDs (#3-adjacent) ─────────────────────
+
+  it("show displays epic details as JSON", async () => {
+    const tasksData: TasksFile = {
+      version: 1,
+      epics: [{ id: "TEST-1", title: "Phase 1", created: "2026-03-30" }],
+      tasks: [
+        { id: "TEST-1.1", title: "A", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: null },
+        { id: "TEST-1.2", title: "B", status: "closed", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: "done" },
+      ],
+    };
+    setupFeature(tmp, "auth", tasksData);
+    await tasks(["show", "TEST-1", "--json"]);
+    const output = logSpy.mock.calls[0][0];
+    const parsed = JSON.parse(output);
+    expect(parsed.type).toBe("epic");
+    expect(parsed.id).toBe("TEST-1");
+    expect(parsed.tasks).toBe(2);
+    expect(parsed.statusCounts.open).toBe(1);
+    expect(parsed.statusCounts.closed).toBe(1);
+  });
+
+  // ── handleUpdate with various flags (#2-adjacent) ─────────────
+
+  it("update changes title, description, design, and notes", async () => {
+    const tasksData: TasksFile = {
+      version: 1,
+      epics: [{ id: "TEST-1", title: "P1", created: "2026-03-30" }],
+      tasks: [
+        { id: "TEST-1.1", title: "Old", status: "open", priority: 2, labels: [], description: "old desc", design: "old design", acceptance: [], notes: "old notes", dependencies: [], comments: [], closeReason: null },
+      ],
+    };
+    setupFeature(tmp, "auth", tasksData);
+    await tasks(["update", "TEST-1.1", "--title", "New Title", "-d", "new desc", "--design", "new design", "--notes", "new notes"]);
+
+    const data = readJson(join(tmp, "plans", "auth", TASKS_FILENAME));
+    expect(data.tasks[0].title).toBe("New Title");
+    expect(data.tasks[0].description).toBe("new desc");
+    expect(data.tasks[0].design).toBe("new design");
+    expect(data.tasks[0].notes).toBe("new notes");
+  });
 });
