@@ -46,6 +46,11 @@ const VALUE_FLAGS = new Set([
   "--status", "--title", "--reason",
 ]);
 
+/** Boolean flags that don't consume a value. */
+const BOOLEAN_FLAGS = new Set([
+  "--json", "--project", "--force",
+]);
+
 /** Extract positional args by skipping flags and their values. */
 function extractPositional(args: string[]): string[] {
   const result: string[] = [];
@@ -53,23 +58,45 @@ function extractPositional(args: string[]): string[] {
     const arg = args[i];
     if (VALUE_FLAGS.has(arg)) {
       i++; // skip the flag's value
-    } else if (!arg.startsWith("-")) {
+    } else if (BOOLEAN_FLAGS.has(arg)) {
+      // known boolean flag, skip
+    } else if (arg.startsWith("-")) {
+      console.error(`Warning: unrecognized flag "${arg}"`);
+    } else {
       result.push(arg);
     }
   }
   return result;
 }
 
-function fail(msg: string, json: boolean): never {
-  if (json) console.log(JSON.stringify({ error: msg }));
-  else console.error(msg);
-  process.exit(1);
+class TasksCommandError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "TasksCommandError";
+  }
+}
+
+function fail(msg: string): never {
+  throw new TasksCommandError(msg);
 }
 
 export async function tasks(args: string[]): Promise<void> {
   const json = args.includes("--json");
   const project = args.includes("--project");
 
+  try {
+    await tasksInner(args, json, project);
+  } catch (err) {
+    if (err instanceof TasksCommandError) {
+      if (json) console.log(JSON.stringify({ error: err.message }));
+      else console.error(err.message);
+      process.exit(1);
+    }
+    throw err;
+  }
+}
+
+async function tasksInner(args: string[], json: boolean, project: boolean): Promise<void> {
   const positional = extractPositional(args);
 
   const subcommand = positional[0];
@@ -78,7 +105,7 @@ export async function tasks(args: string[]): Promise<void> {
   try {
     readProjectPrefix(cwd);
   } catch (err) {
-    fail((err as Error).message, json);
+    fail((err as Error).message);
   }
 
   if (subcommand && RESERVED.includes(subcommand)) {
@@ -95,7 +122,7 @@ export async function tasks(args: string[]): Promise<void> {
       case "show": return handleShow(positional, json, cwd);
       case "ready": return handleReady(positional, json, cwd);
       default:
-        fail(`Subcommand "${subcommand}" is not yet implemented.`, json);
+        fail(`Subcommand "${subcommand}" is not yet implemented.`);
     }
   } else {
     return handleScaffold(positional, json, project, cwd);
@@ -113,13 +140,13 @@ async function handleScaffold(
   const feature = project ? null : positional[0] || null;
 
   if (!project && !feature) {
-    fail("Usage: forge tasks <feature-name> or forge tasks --project", json);
+    fail("Usage: forge tasks <feature-name> or forge tasks --project");
   }
 
   if (!project && feature) {
     const planFile = join(dirname(resolveTasksPath(feature, cwd)), "plan.md");
     if (!existsSync(planFile)) {
-      fail(`No plan found at plans/${feature}/plan.md. Run 'forge plan ${feature}' first.`, json);
+      fail(`No plan found at plans/${feature}/plan.md. Run 'forge plan ${feature}' first.`);
     }
   }
 
@@ -162,7 +189,7 @@ async function handleEpic(
 ): Promise<void> {
   const action = positional[1];
   if (action !== "create") {
-    fail(`Unknown epic subcommand: ${action ?? "(none)"}. Available: create. Usage: forge tasks epic create <feature|--project> "title"`, json);
+    fail(`Unknown epic subcommand: ${action ?? "(none)"}. Available: create. Usage: forge tasks epic create <feature|--project> "title"`);
   }
 
   let feature: string | null;
@@ -176,8 +203,8 @@ async function handleEpic(
     title = positional[3];
   }
 
-  if (!title) fail('Missing epic title. Usage: forge tasks epic create <feature|--project> "title"', json);
-  if (!project && !feature) fail('Missing feature name. Usage: forge tasks epic create <feature> "title"', json);
+  if (!title) fail('Missing epic title. Usage: forge tasks epic create <feature|--project> "title"');
+  if (!project && !feature) fail('Missing feature name. Usage: forge tasks epic create <feature> "title"');
 
   const id = await createEpic(feature, title, cwd);
 
@@ -205,8 +232,8 @@ async function handleCreate(
     title = positional[2];
   }
 
-  if (!title) fail('Missing task title. Usage: forge tasks create <feature|--project> "title" --parent <id>', json);
-  if (!project && !feature) fail('Missing feature name. Usage: forge tasks create <feature> "title" --parent <id>', json);
+  if (!title) fail('Missing task title. Usage: forge tasks create <feature|--project> "title" --parent <id>');
+  if (!project && !feature) fail('Missing feature name. Usage: forge tasks create <feature> "title" --parent <id>');
 
   // Parse flags
   let parentId: string | undefined;
@@ -224,7 +251,7 @@ async function handleCreate(
     else if (arg === "--priority" && next) {
       const parsed = parseInt(next, 10);
       if (isNaN(parsed) || parsed < 0 || parsed > 4) {
-        fail(`Invalid priority "${next}". Must be a number between 0 and 4.`, json);
+        fail(`Invalid priority "${next}". Must be a number between 0 and 4.`);
       }
       priority = parsed; i++;
     }
@@ -239,14 +266,14 @@ async function handleCreate(
   if (!parentId) {
     const filePath = resolveTasksPath(feature, cwd);
     const data = readTasksFile(filePath);
-    if (!data) fail(`No tasks.json found${feature ? ` for ${feature}` : ""}. Run scaffold first.`, json);
-    if (data!.epics.length === 1) {
-      parentId = data!.epics[0].id;
-    } else if (data!.epics.length === 0) {
-      fail("No epics found. Create an epic first with: forge tasks epic create", json);
+    if (!data) return fail(`No tasks.json found${feature ? ` for ${feature}` : ""}. Run scaffold first.`);
+    if (data.epics.length === 1) {
+      parentId = data.epics[0].id;
+    } else if (data.epics.length === 0) {
+      return fail("No epics found. Create an epic first with: forge tasks epic create");
     } else {
-      const ids = data!.epics.map((e) => e.id).join(", ");
-      fail(`Multiple epics found (${ids}). Specify --parent <epic-id>.`, json);
+      const ids = data.epics.map((e) => e.id).join(", ");
+      return fail(`Multiple epics found (${ids}). Specify --parent <epic-id>.`);
     }
   }
 
@@ -267,11 +294,11 @@ async function handleDep(positional: string[], json: boolean, cwd: string): Prom
   const blockerId = positional[3];
 
   if (!action || !["add", "remove"].includes(action)) {
-    fail("Usage: forge tasks dep add|remove <blocked> <blocker>", json);
+    fail("Usage: forge tasks dep add|remove <blocked> <blocker>");
   }
 
   if (!blockedId || !blockerId) {
-    fail("Both blocked and blocker task IDs are required.", json);
+    fail("Both blocked and blocker task IDs are required.");
   }
 
   try {
@@ -285,7 +312,7 @@ async function handleDep(positional: string[], json: boolean, cwd: string): Prom
       else console.log(`Removed dependency: ${blockedId} no longer blocked by ${blockerId}`);
     }
   } catch (err) {
-    fail((err as Error).message, json);
+    fail((err as Error).message);
   }
 }
 
@@ -295,7 +322,7 @@ async function handleClose(positional: string[], json: boolean, args: string[], 
   const force = args.includes("--force");
   const id = positional[1];
 
-  if (!id) fail('Usage: forge tasks close <id> [--reason "..."] [--force]', json);
+  if (!id) fail('Usage: forge tasks close <id> [--reason "..."] [--force]');
 
   let reason: string | undefined;
   const reasonIdx = args.indexOf("--reason");
@@ -306,7 +333,7 @@ async function handleClose(positional: string[], json: boolean, args: string[], 
     if (json) console.log(JSON.stringify({ status: "closed", id, reason: reason || "completed" }));
     else console.log(`Closed task ${id} (reason: ${reason || "completed"})`);
   } catch (err) {
-    fail((err as Error).message, json);
+    fail((err as Error).message);
   }
 }
 
@@ -314,7 +341,7 @@ async function handleClose(positional: string[], json: boolean, args: string[], 
 
 async function handleUpdate(args: string[], positional: string[], json: boolean, cwd: string): Promise<void> {
   const id = positional[1];
-  if (!id) fail("Usage: forge tasks update <id> [--status <s>] [--priority <n>] [--title ...] [-d ...] [--design ...] [--notes ...]", json);
+  if (!id) fail("Usage: forge tasks update <id> [--status <s>] [--priority <n>] [--title ...] [-d ...] [--design ...] [--notes ...]");
 
   const fields: Partial<Pick<Task, "status" | "priority" | "title" | "description" | "design" | "notes">> = {};
 
@@ -323,10 +350,7 @@ async function handleUpdate(args: string[], positional: string[], json: boolean,
     const next = args[i + 1];
     if (arg === "--status" && next) {
       if (!VALID_STATUSES.includes(next as TaskStatus)) {
-        fail(`Invalid status "${next}". Must be one of: ${VALID_STATUSES.join(", ")}`, json);
-      }
-      if (next === "closed") {
-        fail(`Cannot set status to "closed" via update. Use "forge tasks close <id>" instead.`, json);
+        fail(`Invalid status "${next}". Must be one of: ${VALID_STATUSES.join(", ")}`);
       }
       fields.status = next as TaskStatus;
       i++;
@@ -334,7 +358,7 @@ async function handleUpdate(args: string[], positional: string[], json: boolean,
     else if (arg === "--priority" && next) {
       const parsed = parseInt(next, 10);
       if (isNaN(parsed) || parsed < 0 || parsed > 4) {
-        fail(`Invalid priority "${next}". Must be a number between 0 and 4.`, json);
+        fail(`Invalid priority "${next}". Must be a number between 0 and 4.`);
       }
       fields.priority = parsed; i++;
     }
@@ -344,12 +368,16 @@ async function handleUpdate(args: string[], positional: string[], json: boolean,
     else if (arg === "--notes" && next) { fields.notes = next; i++; }
   }
 
+  if (Object.keys(fields).length === 0) {
+    fail("No fields to update. Use --status, --priority, --title, -d, --design, or --notes.");
+  }
+
   try {
     await updateTask(id, fields, cwd);
     if (json) console.log(JSON.stringify({ status: "updated", id, fields }));
     else console.log(`Updated task ${id}`);
   } catch (err) {
-    fail((err as Error).message, json);
+    fail((err as Error).message);
   }
 }
 
@@ -358,14 +386,14 @@ async function handleUpdate(args: string[], positional: string[], json: boolean,
 async function handleComment(positional: string[], json: boolean, cwd: string): Promise<void> {
   const id = positional[1];
   const message = positional[2];
-  if (!id || !message) fail('Usage: forge tasks comment <id> "message"', json);
+  if (!id || !message) fail('Usage: forge tasks comment <id> "message"');
 
   try {
     await addComment(id, message, cwd);
     if (json) console.log(JSON.stringify({ status: "commented", id }));
     else console.log(`Added comment to ${id}`);
   } catch (err) {
-    fail((err as Error).message, json);
+    fail((err as Error).message);
   }
 }
 
@@ -374,14 +402,14 @@ async function handleComment(positional: string[], json: boolean, cwd: string): 
 async function handleLabel(positional: string[], json: boolean, cwd: string): Promise<void> {
   const id = positional[1];
   const label = positional[2];
-  if (!id || !label) fail("Usage: forge tasks label <id> <label>", json);
+  if (!id || !label) fail("Usage: forge tasks label <id> <label>");
 
   try {
     await addLabel(id, label, cwd);
     if (json) console.log(JSON.stringify({ status: "labeled", id, label }));
     else console.log(`Added label "${label}" to ${id}`);
   } catch (err) {
-    fail((err as Error).message, json);
+    fail((err as Error).message);
   }
 }
 
@@ -477,7 +505,7 @@ function outputTaskList(data: TasksFile, json: boolean): void {
 
 async function handleShow(positional: string[], json: boolean, cwd: string): Promise<void> {
   const taskId = positional[1];
-  if (!taskId) fail("Usage: forge tasks show <task-id>", json);
+  if (!taskId) fail("Usage: forge tasks show <task-id>");
 
   const files = discoverTaskFiles(cwd);
   for (const filePath of files) {
@@ -526,7 +554,7 @@ async function handleShow(positional: string[], json: boolean, cwd: string): Pro
     }
   }
 
-  fail(`Task "${taskId}" not found.`, json);
+  fail(`Task "${taskId}" not found.`);
 }
 
 // ── Ready handler ───────────────────────────────────────
