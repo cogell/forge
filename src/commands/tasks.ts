@@ -41,7 +41,7 @@ const VALID_STATUSES: TaskStatus[] = ["open", "in_progress", "closed"];
 
 /** Flags that consume the next arg as their value. */
 const VALUE_FLAGS = new Set([
-  "--parent", "--priority", "--acceptance", "--label",
+  "--parent", "--priority", "-p", "--acceptance", "-a", "--label", "-l",
   "-d", "--description", "--design", "--notes",
   "--status", "--title", "--reason",
 ]);
@@ -248,15 +248,15 @@ async function handleCreate(
     const arg = args[i];
     const next = args[i + 1];
     if (arg === "--parent" && next) { parentId = next; i++; }
-    else if (arg === "--priority" && next) {
+    else if ((arg === "--priority" || arg === "-p") && next) {
       const parsed = parseInt(next, 10);
       if (isNaN(parsed) || parsed < 0 || parsed > 4) {
         fail(`Invalid priority "${next}". Must be a number between 0 and 4.`);
       }
       priority = parsed; i++;
     }
-    else if (arg === "--acceptance" && next) { acceptance.push(next); i++; }
-    else if (arg === "--label" && next) { labels.push(next); i++; }
+    else if ((arg === "--acceptance" || arg === "-a") && next) { acceptance.push(next); i++; }
+    else if ((arg === "--label" || arg === "-l") && next) { labels.push(next); i++; }
     else if ((arg === "-d" || arg === "--description") && next) { description = next; i++; }
     else if (arg === "--design" && next) { design = next; i++; }
     else if (arg === "--notes" && next) { notes = next; i++; }
