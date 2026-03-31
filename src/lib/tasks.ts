@@ -478,19 +478,6 @@ function reloadTask(
   return { data, taskIndex };
 }
 
-/**
- * Build a map of task-id → status across all task files.
- */
-function buildStatusMap(root: string): Map<string, TaskStatus> {
-  const map = new Map<string, TaskStatus>();
-  for (const filePath of discoverTaskFilesFromRoot(root)) {
-    const data = readTasksFile(filePath);
-    if (!data) continue;
-    for (const task of data.tasks) map.set(task.id, task.status);
-  }
-  return map;
-}
-
 // ─── Public Write Functions ─────────────────────────────────────────
 
 /**
