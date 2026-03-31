@@ -30,6 +30,8 @@ Before slicing, identify high-level decisions unlikely to change:
 
 These go in the plan header so every phase can reference them.
 
+**Name shared constants:** When a decision defines a default value that will appear in 3+ files, declare it as a named constant (e.g., `DEFAULT_OP_START = 8`). Prose-only defaults get hardcoded as magic numbers by task agents.
+
 ### Step 4: Map file structure
 
 Before slicing, map out which files will be created or modified and what each is responsible for. This is where decomposition decisions get locked in:
@@ -65,7 +67,7 @@ Break the PRD into **tracer bullet** phases. Each phase is a thin vertical slice
 
 ### Step 6: Scope check
 
-If the plan spans multiple independent subsystems with no shared interfaces, consider whether it should be separate plans — one per subsystem. Each plan should produce working, testable software on its own. However, a single plan that crosses subsystems is fine when the phases share data models, APIs, or other contracts — the task decomposition (beads DAG) gives enough structure to manage the complexity.
+If the plan spans multiple independent subsystems with no shared interfaces, consider whether it should be separate plans — one per subsystem. Each plan should produce working, testable software on its own. However, a single plan that crosses subsystems is fine when the phases share data models, APIs, or other contracts — the task decomposition (tasks DAG) gives enough structure to manage the complexity.
 
 ### Step 7: Quiz the user
 

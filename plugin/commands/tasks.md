@@ -1,18 +1,18 @@
 ---
-description: Decompose an implementation plan into a beads epic with child tasks and dependencies
+description: Decompose an implementation plan into an epic with child tasks and dependencies
 argument-hint: <feature-name>
 ---
 
-Run `forge tasks $ARGUMENTS` to validate preconditions (plan exists, bd available).
+Run `forge tasks $ARGUMENTS` to validate preconditions (plan exists).
 
-Then decompose the plan into beads:
+Then decompose the plan into tasks:
 
 ## Process
 
 ### Step 1: Create the phase epic
 
 ```bash
-bd create "Phase N: <Phase Title>" -t epic -p 1 \
+forge tasks epic create "Phase N: <Phase Title>" -p 1 \
   -d "Source: plans/<feature>/plan.md — Phase N" \
   -l "phase:N"
 ```
@@ -29,8 +29,8 @@ For each acceptance criterion or logical unit of work, create a child task.
 **Create with structured content:**
 
 ```bash
-bd create "Task title" \
-  -t task -p <0-4> \
+forge tasks create "Task title" \
+  -p <0-4> \
   --parent <epic-id> \
   -l "complexity:<1-10>,phase:N" \
   -d "WHAT: 2-4 sentence problem statement" \
@@ -43,7 +43,7 @@ bd create "Task title" \
 ### Step 3: Set dependencies
 
 ```bash
-bd dep add <blocked-task> <blocking-task>
+forge tasks dep add <blocked-task> <blocking-task>
 ```
 
 ### Step 4: Score complexity
@@ -57,17 +57,31 @@ bd dep add <blocked-task> <blocking-task>
 
 Tasks scoring 7+ become mini-epics with children. Each child ≤6. Max nesting: 3 levels.
 
-### Step 5: Validate the DAG
+### Step 5: Cross-reference the plan
+
+After decomposition, walk the plan section-by-section to catch items that got lost in translation:
+
+1. **Testing scenarios** — Read the plan's testing section and PRD's Testing Decisions. Every test scenario must map to a task's acceptance criteria. If one doesn't, add it to the relevant task or create a dedicated test task.
+
+2. **UX-sensitive language** — Scan the plan for *immediately, instant, real-time, without delay, seamless*. Translate each into concrete implementation requirements (e.g., "immediately" → "optimistic update with rollback on failure"). Don't leave UX contracts as vague task language.
+
+3. **Zero-data states** — For every task consuming backend data with defaults, add: `- [ ] Works correctly when API returns empty/default response`. First-use is the most common untested path.
+
+4. **Shared constants** — If durable decisions name constants, tasks must reference the constant name in `design`, not the raw value. If a default appears in 3+ tasks but isn't named, flag it.
+
+Confirm all items reconcile before proceeding. See [tasks-process.md](../../guidance/tasks-process.md) for the full cross-reference protocol.
+
+### Step 6: Validate the DAG
 
 ```bash
-bd swarm validate <epic-id>
+forge tasks validate <epic-id>
 ```
 
 ### Cross-boundary contracts
 
 When tasks span layers (API → daemon → CLI), the `design` field of each task MUST use identical names for shared contracts. Name drift causes silent bugs.
 
-### Step 6: Review gate
+### Step 7: Review gate
 
 Before advancing to `/forge:run`, run the review gate per [review-gates.md](../../guidance/review-gates.md). Run the self-review checklist first, then external review. Each review pass uses a fresh context with full tools. Advance when a pass surfaces no critical or major issues.
 

@@ -4,7 +4,7 @@
  */
 
 import type { FeatureState, PipelineState, Stage } from "./pipeline";
-import type { ReadyTask } from "./beads";
+import type { ReadyTask } from "./tasks";
 import type { ProjectState } from "../commands/global";
 
 // ── ANSI helpers ──────────────────────────────────────────

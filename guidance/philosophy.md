@@ -8,7 +8,7 @@ Reference material for the principles behind the forge pipeline.
 |-------|-----------|----------|-----------|
 | **Planning** | `plans/` | PRDs, plans, reflections | Feature-scoped: active → completed → historical |
 | **Knowledge** | `docs/` | Architecture, guides, reference, ADRs | Evergreen: trimmed and updated, never "completed" |
-| **Execution** | `.beads/` | Tasks, DAGs, swarms, progress | Transient: closed and compacted |
+| **Execution** | `plans/<feature>/tasks.json` | Tasks, DAGs, progress | Transient: closed and compacted |
 
 Planning artifacts *produce* knowledge artifacts. Execution *produces* reflections. When a feature ships, insights graduate into `docs/`.
 
@@ -18,7 +18,7 @@ Planning artifacts *produce* knowledge artifacts. Execution *produces* reflectio
 1. Brainstorm    (plans/<feature>/brainstorm.md)   — divergent exploration
 2. PRD           (plans/<feature>/prd.md)           — the "what and why"
 3. Plan          (plans/<feature>/plan.md)          — the "how, in what order"
-4. Tasks         (.beads/)                           — the "do it now"
+4. Tasks         (plans/<feature>/tasks.json)         — the "do it now"
 5. Code                                              — the output
 6. Reflections   (plans/<feature>/reflections.md)   — learnings during execution
 7. Review        (PR ready for human/agent review)  — the quality gate

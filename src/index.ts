@@ -37,7 +37,7 @@ Commands:
   brainstorm <feature>      Divergent exploration: gather ideas, map problem space
   prd <feature>             Convergent: write PRD from brainstorm output
   plan <feature>            Slice PRD into phased implementation plan
-  tasks <feature>           Decompose plan into beads DAG
+  tasks <sub> [feature]     Task management: scaffold, create, list, close, etc.
   run <feature>             Autopilot: plan → tasks → implement → docs → PR
   reflect <feature>         Capture learnings from implementation
   retro <feature>           Root cause analysis when review finds issues

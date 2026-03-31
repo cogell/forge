@@ -40,7 +40,11 @@ Generate and explore options freely:
 
 Capture everything in `plans/<feature>/brainstorm.md` — this is raw material, not a polished document.
 
-### Step 4: Converge — identify the path
+### Step 4: Granularity check
+
+If the solution involves any toggle, filter, or setting, ask: does it apply **globally**, **per-entity**, **per-day**, or **per-entity-per-day**? Can different users/roles have different values? Toggle granularity is a common source of late rework — catch it now.
+
+### Step 5: Converge — identify the path
 
 Help the user narrow down:
 

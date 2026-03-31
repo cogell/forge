@@ -53,6 +53,14 @@ Map the people and systems involved:
 - What are the hard constraints (technical, business, timeline)?
 - What are the soft constraints (preferences, conventions)?
 
+**Granularity check for toggles, filters, and settings.** If the solution involves any toggle, filter, preference, or configurable setting, ask explicitly:
+
+- Does this apply **globally**, **per-entity**, **per-day**, or **per-entity-per-day**?
+- Can different users/roles have different values?
+- What is the default, and can it be changed after initial setup?
+
+Toggle granularity is a common source of late scope changes. A "Slots toggle" that starts global but needs to be per-room-per-day is a full rework. Catching it during brainstorm is nearly free.
+
 ### Step 5: Surface open questions
 
 List everything that isn't known yet:

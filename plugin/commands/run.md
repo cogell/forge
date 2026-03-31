@@ -10,7 +10,6 @@ Run `forge run $ARGUMENTS` to validate preconditions and see the execution plan.
 ## Prerequisites
 
 - `plans/<feature>/prd.md` must exist (written via `/forge:prd`)
-- `bd` CLI installed and initialized
 - Git repo with a clean working tree
 
 ## Orchestration Flow
@@ -18,7 +17,7 @@ Run `forge run $ARGUMENTS` to validate preconditions and see the execution plan.
 ### Phase 0: Setup
 
 1. **Ensure plan exists.** If no plan, run the `/forge:plan` process. No human input needed — the PRD has the answers.
-2. **Ensure beads DAG exists.** If no epic, run the `/forge:tasks` process.
+2. **Ensure tasks DAG exists.** If no epic, run the `/forge:tasks` process.
 3. **Read execution strategy** from `plans/<feature>/plan.md` frontmatter (`execution` field):
    - `phase-prs` → one PR per phase, stop after each for human review
    - `single-pr` → one branch, one PR at the end
@@ -29,16 +28,16 @@ Run `forge run $ARGUMENTS` to validate preconditions and see the execution plan.
 #### Task loop
 
 ```
-while bd ready returns tasks for this phase's epic:
+while forge tasks ready returns tasks for this phase's epic:
     1. Pick highest-priority ready task
     2. Spawn a task agent (worktree isolation, TDD workflow)
     3. On task failure → spawn salvage agent (uses debugging.md protocol)
     4. On task success → run review loop:
-       a. Spawn review agent with bead content + git diff
-       b. PASS → merge worktree branch, close bead
+       a. Spawn review agent with task content + git diff
+       b. PASS → merge worktree branch, close task
        c. FAIL → spawn fix agent with review feedback
        d. Spawn review agent again
-       e. PASS → merge worktree branch, close bead
+       e. PASS → merge worktree branch, close task
        f. FAIL (2nd) → label needs-human, skip task
     5. Repeat
 ```
@@ -68,7 +67,7 @@ Push, create PR, stop and notify user for review. Don't start next phase until m
 
 ## Task Agent
 
-Each task agent receives: bead title, description (WHAT), design (HOW), acceptance criteria, and notes. Agent works in a worktree using the **TDD cycle** (RED → GREEN → REFACTOR per [tdd.md](../../guidance/tdd.md)):
+Each task agent receives: task title, description (WHAT), design (HOW), acceptance criteria, and notes. Agent works in a worktree using the **TDD cycle** (RED → GREEN → REFACTOR per [tdd.md](../../guidance/tdd.md)):
 
 1. RED — write failing tests from acceptance criteria
 2. GREEN — minimum implementation to pass tests
@@ -91,11 +90,11 @@ On task failure, a salvage agent uses the **systematic debugging protocol** ([de
 3. Reproduce before fixing
 4. Narrow scope → one hypothesis → test it → confirm root cause
 
-If salvage fails: comment on bead with diagnosis, label `needs-human`, skip and continue.
+If salvage fails: comment on task with diagnosis, label `needs-human`, skip and continue.
 
 ## Error Recovery
 
-The beads DAG is the source of truth. Run `/forge:run <feature>` again after any interruption — it detects existing state and picks up where it left off.
+The tasks DAG is the source of truth. Run `/forge:run <feature>` again after any interruption — it detects existing state and picks up where it left off.
 
 ## Deep Reference
 

@@ -15,8 +15,8 @@ Then review the implementation work and write reflections.
 # Check what's been done
 forge reflect <feature>
 
-# Read closed beads for this feature
-bd list --parent <epic-id> --status closed --json
+# Read closed tasks for this feature
+forge tasks list --parent <epic-id> --status closed --json
 
 # Read existing reflections (if any)
 cat plans/<feature>/reflections.md
@@ -26,7 +26,7 @@ Read the git log for the feature branch to see what was built and how.
 
 ### Step 2: Ask the four questions
 
-For each completed phase (or for the feature as a whole if reflecting at the end), review the closed beads and ask:
+For each completed phase (or for the feature as a whole if reflecting at the end), review the closed tasks and ask:
 
 1. **Platform gotchas** — did anything behave unexpectedly? Runtime quirks, API surprises, tooling friction?
 2. **Debugging discoveries** — what was hard to diagnose? What would have saved time?

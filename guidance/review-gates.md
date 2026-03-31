@@ -160,16 +160,16 @@ codebase access. Do not rewrite — only identify issues.
 Same as PRD review: <severity>: <description>, end with PASS or FAIL.
 ```
 
-### Tasks review (beads)
+### Tasks review
 
 Source: plan
 
 ```
-You are reviewing task definitions (beads) against their source plan.
+You are reviewing task definitions against their source plan.
 You have full codebase access. Do not rewrite — only identify issues.
 
 ## Artifact
-<bd list --parent <epic-id> output, including description, design,
+<forge tasks list --parent <epic-id> output, including description, design,
  acceptance_criteria, and notes for each task>
 
 ## Source material
@@ -197,7 +197,7 @@ You have full codebase access. Do not rewrite — only identify issues.
 - Dependency graph matches the implementation order implied by the plan
 - No circular dependencies
 - No task imports from or calls interfaces defined in a task it doesn't depend on
-- Run `bd swarm validate <epic-id>` — DAG must be valid
+- Run `forge tasks validate <epic-id>` — DAG must be valid
 
 ### Cross-boundary contracts
 - Tasks that share interfaces (API routes, data models, function signatures) use

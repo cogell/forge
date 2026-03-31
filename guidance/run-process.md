@@ -8,8 +8,7 @@ Orchestrate the full post-PRD pipeline: plan → tasks → implement → docs �
 
 - `plans/<feature>/prd.md` must exist (human-authored via `/forge:prd`) and have passed the review gate
 - `plans/<feature>/plan.md` should have passed the review gate per [review-gates.md](review-gates.md)
-- Beads task definitions should have passed the review gate per [review-gates.md](review-gates.md)
-- `bd` CLI installed and initialized in the project
+- Task definitions should have passed the review gate per [review-gates.md](review-gates.md)
 - Git repo with a clean working tree
 
 ## Orchestration Flow
@@ -17,7 +16,7 @@ Orchestrate the full post-PRD pipeline: plan → tasks → implement → docs �
 ### Phase 0: Setup
 
 1. **Ensure plan exists.** If no `plans/<feature>/plan.md`, run the `/forge:plan` process. No human input needed — the PRD has the answers.
-2. **Ensure beads DAG exists.** If no beads epic for this feature, run the `/forge:tasks` process.
+2. **Ensure tasks DAG exists.** If no epic for this feature, run the `/forge:tasks` process.
 3. **Read execution strategy.** Parse the `execution` field from `plans/<feature>/plan.md` frontmatter:
    - `phase-prs` → **phase PRs** (one PR per phase, stop after each for human review before continuing)
    - `single-pr` → **single PR** (one branch, one PR at the end)
@@ -36,16 +35,16 @@ Orchestrate the full post-PRD pipeline: plan → tasks → implement → docs �
 **Before each task agent spawn**, ensure the worktree branches from the **current feature branch HEAD** — not a stale point. Prior tasks' merges must be visible to subsequent agents. If tasks are run sequentially, this happens naturally. If worktrees were pre-created, rebase or recreate them from the latest HEAD before spawning.
 
 ```
-while bd ready returns tasks for this phase's epic:
+while forge tasks ready returns tasks for this phase's epic:
     1. Pick the highest-priority ready task
     2. Spawn a task agent (see "Task Agent" below)
     3. On task failure → spawn salvage agent (see "Salvage Agent" below)
     4. On task success → run review loop (see "Review Loop" below):
-       a. Spawn review agent with bead content + git diff
-       b. PASS → merge worktree branch, close bead
+       a. Spawn review agent with task content + git diff
+       b. PASS → merge worktree branch, close task
        c. FAIL → spawn fix agent with review feedback
        d. Spawn review agent again
-       e. PASS → merge worktree branch, close bead
+       e. PASS → merge worktree branch, close task
        f. FAIL (2nd) → label needs-human, skip task
     5. Repeat
 ```
@@ -65,7 +64,7 @@ Append-only log of learnings discovered during implementation.
 - <learning>
 ```
 
-For each completed phase, review the closed beads and ask:
+For each completed phase, review the closed tasks and ask:
 
 1. **Platform gotchas** — did anything behave unexpectedly? Runtime quirks, API surprises, tooling friction?
 2. **Debugging discoveries** — what was hard to diagnose? What would have saved time?
@@ -160,19 +159,19 @@ Each task is executed by a subagent spawned in a **worktree** for isolation.
 You are implementing a single task for the <feature> feature.
 
 ## Task: <title>
-**Bead ID**: <id>
+**Task ID**: <id>
 
 ## What (description)
-<bead description field>
+<task description field>
 
 ## How (design)
-<bead design field>
+<task design field>
 
 ## Acceptance Criteria
-<bead acceptance_criteria field>
+<task acceptance_criteria field>
 
 ## Notes
-<bead notes field>
+<task notes field>
 
 ## Instructions
 1. Read the files mentioned in Notes to understand current state
@@ -213,21 +212,21 @@ Once review passes, the orchestrator merges — never copies raw files:
 ```bash
 git merge <worktree-branch> --no-ff -m "feat(<feature>): <task title>
 
-Bead: <bead-id>
+Task: <task-id>
 
 Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>"
 
-bd close <bead-id> --reason "Implemented, tests passing, review passed"
+forge tasks close <task-id> --reason "Implemented, tests passing, review passed"
 ```
 
 ### Parallel agents and close ordering
 
-When running tasks in parallel, agents may finish out of dependency order (e.g., task 5 finishes before its dependency task 4). This is expected — `bd ready` treats `in_progress` deps as unblocked so parallel work can proceed.
+When running tasks in parallel, agents may finish out of dependency order (e.g., task 5 finishes before its dependency task 4). This is expected — `forge tasks ready` treats `in_progress` deps as unblocked so parallel work can proceed.
 
-If `bd close` rejects because a dependency is still `in_progress`, use `--force`:
+If `forge tasks close` rejects because a dependency is still `in_progress`, use `--force`:
 
 ```bash
-bd close <bead-id> --force --reason "Implemented; dep still in_progress from parallel agent"
+forge tasks close <task-id> --force --reason "Implemented; dep still in_progress from parallel agent"
 ```
 
 ### On failure
@@ -243,8 +242,8 @@ After each task agent succeeds, the orchestrator runs a two-stage review before 
 ```
 attempt = 1
 while attempt <= 2:
-    spawn review agent (bead content + git diff)
-    if PASS → merge + close bead, exit loop
+    spawn review agent (task content + git diff)
+    if PASS → merge + close task, exit loop
     if FAIL:
         if attempt == 1 → spawn fix agent with review feedback, attempt = 2
         if attempt == 2 → label needs-human, skip task, exit loop
@@ -264,25 +263,25 @@ If either fails, spawn a fix agent with the lint/type errors before proceeding t
 
 ### Review Agent
 
-Receives the bead's full content plus the diff of the worktree branch.
+Receives the task's full content plus the diff of the worktree branch.
 
 ```
 You are a code reviewer for a single completed task. Do not implement anything.
 
 ## Task: <title>
-**Bead ID**: <id>
+**Task ID**: <id>
 
 ## What (description)
-<bead description field>
+<task description field>
 
 ## How (design)
-<bead design field>
+<task design field>
 
 ## Acceptance Criteria
-<bead acceptance_criteria field>
+<task acceptance_criteria field>
 
 ## Files in scope
-<bead notes field — files list>
+<task notes field — files list>
 
 ## What was implemented
 <git diff of worktree branch>
@@ -340,15 +339,15 @@ A review agent reviewed your implementation and found issues. Fix them.
 If the review agent returns FAIL on the second attempt:
 
 ```bash
-bd comment <bead-id> "Review failed after fix attempt.
+forge tasks comment <task-id> "Review failed after fix attempt.
 
 Issues found:
 <review feedback from attempt 2>
 
 Needs human attention."
 
-bd update <bead-id> --status open
-bd label <bead-id> needs-human
+forge tasks update <task-id> --status open
+forge tasks label <task-id> needs-human
 ```
 
 Skip this task and continue with the next unblocked task.
@@ -414,7 +413,7 @@ cause is, and what a human would need to do to unblock it.
 - **Salvage succeeds** → run review loop (same as normal success)
 - **Salvage fails** → do NOT merge. Instead:
   ```bash
-  bd comment <bead-id> "Auto-implementation failed after salvage attempt.
+  forge tasks comment <task-id> "Auto-implementation failed after salvage attempt.
 
   Error: <summary of what went wrong>
   Attempted approaches: <what both agents tried>
@@ -422,8 +421,8 @@ cause is, and what a human would need to do to unblock it.
 
   Needs human attention."
 
-  bd update <bead-id> --status open
-  bd label <bead-id> needs-human
+  forge tasks update <task-id> --status open
+  forge tasks label <task-id> needs-human
   ```
   Then **skip this task** and continue with the next unblocked task. The DAG handles this — tasks that depend on the failed one will stay blocked, but independent tasks proceed.
 
@@ -433,10 +432,10 @@ cause is, and what a human would need to do to unblock it.
 
 ### Agent crashes or context fills up
 
-The beads DAG is the source of truth. To resume after any interruption:
+The tasks DAG is the source of truth. To resume after any interruption:
 
 ```bash
-bd ready   # shows what's unblocked and unclaimed
+forge tasks ready   # shows what's unblocked and unclaimed
 ```
 
 Run `/forge:run <feature>` again — it detects existing plan, tasks, and branch, and picks up where it left off.
@@ -454,7 +453,7 @@ If merging a worktree branch causes conflicts:
 After merging each task, run the full test suite (not just the task's tests):
 
 ```bash
-# After merge, before closing the bead
+# After merge, before closing the task
 <project test command>   # e.g., pnpm test
 ```
 

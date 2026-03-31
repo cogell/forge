@@ -1,13 +1,13 @@
 /**
  * forge reflect <feature>
  *
- * Check state for reflection: are there closed beads to reflect on?
+ * Check state for reflection: are there closed tasks to reflect on?
  * Reports what's available. The agent handles the actual reflection.
  */
 
 import { existsSync, readFileSync } from "fs";
 import { join } from "path";
-import { queryBeadsEpic } from "../lib/beads";
+import { queryFeatureTasks } from "../lib/tasks";
 
 export async function reflect(args: string[]): Promise<void> {
   const json = args.includes("--json");
@@ -43,8 +43,8 @@ export async function reflect(args: string[]): Promise<void> {
     state.existingPhases = phases ? phases.length : 0;
   }
 
-  // Check beads for closed tasks to reflect on
-  const epic = await queryBeadsEpic(feature);
+  // Check tasks for closed tasks to reflect on
+  const epic = queryFeatureTasks(feature, cwd);
   if (epic) {
     state.epic = { totalTasks: epic.totalTasks, closedTasks: epic.closedTasks };
   }
@@ -66,7 +66,7 @@ export async function reflect(args: string[]): Promise<void> {
   }
   console.log();
   console.log("Ready for reflection. The agent will:");
-  console.log("  1. Review closed beads and implementation work");
+  console.log("  1. Review closed tasks and implementation work");
   console.log("  2. Identify platform gotchas, debugging discoveries,");
   console.log("     validated patterns, and process improvements");
   console.log(`  3. Append to plans/${feature}/reflections.md`);
