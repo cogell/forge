@@ -69,6 +69,8 @@ After decomposition, walk the plan section-by-section to catch items that got lo
 
 4. **Shared constants** — If durable decisions name constants, tasks must reference the constant name in `design`, not the raw value. If a default appears in 3+ tasks but isn't named, flag it.
 
+5. **Visual changes** — For any task that modifies HTML, CSS, layout, or UI components: add an acceptance criterion requiring a screenshot saved to `plans/<feature>/screenshots/`. Add a task note with capture instructions (e.g., `playwright-cli` with JS disabled for skeletons, or dev server screenshot for component changes). Require the PR body's "How to Verify" section to include the screenshot inline. Skip for non-visual changes (build config, pure backend, etc.).
+
 Confirm all items reconcile before proceeding. See [tasks-process.md](../../guidance/tasks-process.md) for the full cross-reference protocol.
 
 ### Step 6: Validate the DAG

@@ -132,7 +132,17 @@ Walk the plan's Architectural Decisions / Durable Decisions section. For each de
 - If it names a shared constant (e.g., `DEFAULT_OP_START = 8`), verify the relevant tasks reference that constant name in their `design` field — not the raw value.
 - If a decision defines a default value that will appear in 3+ tasks, and it's NOT named as a constant, flag it back to the plan author. Hardcoded magic numbers across files are a maintenance hazard.
 
-**7e. Reconciliation checklist**
+**7e. Audit visual changes for screenshot criteria**
+
+For any task that modifies HTML, CSS, layout, or UI components:
+
+- Add an acceptance criterion: `- [ ] Screenshot saved to plans/<feature>/screenshots/<task-id>-<description>.png`
+- Add a task note with capture instructions: which tool to use (`playwright-cli` with JS disabled for skeleton/loading states, dev server screenshot for component changes), what viewport, and any setup steps
+- Add a task note: `PR "How to Verify" section must include the screenshot inline`
+
+Skip for tasks that are purely non-visual (build config, backend-only, CLI tooling, etc.). When in doubt about whether a change is visual, include the criterion — a skipped screenshot is free, a missing one costs a review round-trip.
+
+**7f. Reconciliation checklist**
 
 After the pass, confirm:
 
@@ -140,6 +150,7 @@ After the pass, confirm:
 - [ ] Every UX-sensitive word in the plan has a concrete technical translation in a task
 - [ ] Every task consuming defaultable backend data has a zero-data acceptance criterion
 - [ ] Every shared constant from durable decisions appears by name (not raw value) in task designs
+- [ ] Every task touching HTML/CSS/layout/UI has a screenshot acceptance criterion
 
 Items that fail reconciliation get added to tasks or flagged to the user. Do not proceed to DAG validation until the checklist passes.
 
