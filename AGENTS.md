@@ -28,7 +28,11 @@ cp -rf source dest          # NOT: cp -r source dest
 
 ## Plugin / Skill Updates
 
-Changes to `.claude-plugin/` (commands, SKILL.md, guidance docs) **will not take effect** until the version is incremented in `.claude-plugin/marketplace.json`. Always bump the version when modifying plugin or skill content.
+Changes to `plugin/` (commands, guidance docs) **will not take effect** until the version is incremented in **both**:
+- `plugin/.claude-plugin/plugin.json` — read by Claude Code to detect updates
+- `.claude-plugin/marketplace.json` — the marketplace listing
+
+Always bump both versions when modifying plugin content.
 
 ## Task Tracking
 
