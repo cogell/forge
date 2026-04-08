@@ -26,6 +26,10 @@ cp -rf source dest          # NOT: cp -r source dest
 - `apt-get` - use `-y` flag
 - `brew` - use `HOMEBREW_NO_AUTO_UPDATE=1` env var
 
+## Plugin / Skill Updates
+
+Changes to `.claude-plugin/` (commands, SKILL.md, guidance docs) **will not take effect** until the version is incremented in `.claude-plugin/marketplace.json`. Always bump the version when modifying plugin or skill content.
+
 ## Task Tracking
 
 ```bash

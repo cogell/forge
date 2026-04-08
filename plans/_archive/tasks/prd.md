@@ -1,8 +1,8 @@
 ---
-status: active
+status: completed
 feature: tasks
 created: 2026-03-27
-completed: null
+completed: 2026-03-30
 ---
 
 # PRD: Built-in Task System

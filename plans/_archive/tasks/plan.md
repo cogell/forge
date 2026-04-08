@@ -1,8 +1,8 @@
 ---
-status: active
+status: completed
 feature: tasks
 created: 2026-03-30
-completed: null
+completed: 2026-03-30
 execution: single-pr
 ---
 
