@@ -23,6 +23,7 @@ import {
   validateDag,
   discoverTaskFiles,
   getReadyTasks,
+  getDescendants,
   resolveTasksPath,
   SCHEMA_VERSION,
   TASKS_FILENAME,
@@ -106,7 +107,10 @@ Arguments:
   task-id         The ID to look up (e.g. TEST-1 for epic, TEST-1.2 for task)
 
 Options:
-  --json          Output as JSON
+  --children      Render the parent plus a summary of its direct children
+  --full          Render full task fields. Combined with --children, recurses
+                  through all descendants and renders every field.
+  --json          Output as JSON (structured {task, children} when --children)
   --help, -h      Show this help
 
 Note: The task ID is looked up across all feature files automatically —
@@ -368,7 +372,7 @@ async function tasksInner(args: string[], json: boolean, project: boolean): Prom
       case "validate": return handleValidate(positional, json, project, cwd);
       case "dep": return handleDep(positional, json, cwd);
       case "list": return handleList(positional, json, project, cwd);
-      case "show": return handleShow(positional, json, cwd);
+      case "show": return handleShow(positional, args, json, cwd);
       case "ready": return handleReady(args, positional, json, cwd);
       case "delete": return handleDelete(positional, args, json, cwd);
       default:
@@ -776,9 +780,17 @@ function outputTaskList(data: TasksFile, json: boolean): void {
 
 // ── Show handler ────────────────────────────────────────
 
-async function handleShow(positional: string[], json: boolean, cwd: string): Promise<void> {
+async function handleShow(
+  positional: string[],
+  args: string[],
+  json: boolean,
+  cwd: string,
+): Promise<void> {
   const taskId = positional[1];
-  if (!taskId) fail("Usage: forge tasks show <task-id> [--json]");
+  if (!taskId) fail("Usage: forge tasks show <task-id> [--json] [--children] [--full]");
+
+  const withChildren = args.includes("--children");
+  const full = args.includes("--full");
 
   const files = discoverTaskFiles(cwd);
   for (const filePath of files) {
@@ -803,31 +815,107 @@ async function handleShow(positional: string[], json: boolean, cwd: string): Pro
 
     const task = data.tasks.find((t) => t.id === taskId);
     if (task) {
-      if (json) { console.log(JSON.stringify(task, null, 2)); return; }
-
-      console.log(`Task: ${task.id}`);
-      console.log(`Title: ${task.title}`);
-      console.log(`Status: ${task.status}`);
-      console.log(`Priority: P${task.priority}`);
-      if (task.labels.length > 0) console.log(`Labels: ${task.labels.join(", ")}`);
-      if (task.description) console.log(`\nDescription:\n  ${task.description}`);
-      if (task.design) console.log(`\nDesign:\n  ${task.design}`);
-      if (task.acceptance.length > 0) {
-        console.log(`\nAcceptance Criteria:`);
-        for (const ac of task.acceptance) console.log(`  - ${ac}`);
+      if (withChildren) {
+        renderTaskWithChildren(task, full, json, cwd);
+      } else {
+        if (json) {
+          console.log(JSON.stringify(task, null, 2));
+        } else {
+          renderTaskFull(task);
+        }
       }
-      if (task.notes) console.log(`\nNotes:\n  ${task.notes}`);
-      if (task.dependencies.length > 0) console.log(`\nDependencies: ${task.dependencies.join(", ")}`);
-      if (task.comments.length > 0) {
-        console.log(`\nComments:`);
-        for (const c of task.comments) console.log(`  [${c.timestamp}] ${c.message}`);
-      }
-      if (task.closeReason) console.log(`\nClose Reason: ${task.closeReason}`);
       return;
     }
   }
 
   fail(`Task "${taskId}" not found. Usage: forge tasks show <task-id> [--json]`);
+}
+
+/** Render a single task's full fields as text. */
+function renderTaskFull(task: Task, indent: string = ""): void {
+  const ind = indent;
+  console.log(`${ind}Task: ${task.id}`);
+  console.log(`${ind}Title: ${task.title}`);
+  console.log(`${ind}Status: ${task.status}`);
+  console.log(`${ind}Priority: P${task.priority}`);
+  if (task.labels.length > 0) console.log(`${ind}Labels: ${task.labels.join(", ")}`);
+  if (task.description) console.log(`\n${ind}Description:\n${ind}  ${task.description}`);
+  if (task.design) console.log(`\n${ind}Design:\n${ind}  ${task.design}`);
+  if (task.acceptance.length > 0) {
+    console.log(`\n${ind}Acceptance Criteria:`);
+    for (const ac of task.acceptance) console.log(`${ind}  - ${ac}`);
+  }
+  if (task.notes) console.log(`\n${ind}Notes:\n${ind}  ${task.notes}`);
+  if (task.dependencies.length > 0) console.log(`\n${ind}Dependencies: ${task.dependencies.join(", ")}`);
+  if (task.comments.length > 0) {
+    console.log(`\n${ind}Comments:`);
+    for (const c of task.comments) console.log(`${ind}  [${c.timestamp}] ${c.message}`);
+  }
+  if (task.closeReason) console.log(`\n${ind}Close Reason: ${task.closeReason}`);
+}
+
+/**
+ * Recursive JSON shape: { task, children: [{ task, children: [...] }] }.
+ *
+ * direct children: one-level-deep for the given parent.
+ * all descendants: when full=true, nest recursively so the shape mirrors
+ *                  the tree even though getDescendants returns flat arrays.
+ */
+interface ChildrenJsonNode {
+  task: Task;
+  children: ChildrenJsonNode[];
+}
+
+function buildChildrenJson(parentId: string, full: boolean, cwd: string): ChildrenJsonNode[] {
+  const direct = getDescendants(parentId, "direct", cwd);
+  if (!full) {
+    return direct.map((t) => ({ task: t, children: [] }));
+  }
+  return direct.map((t) => ({
+    task: t,
+    children: buildChildrenJson(t.id, true, cwd),
+  }));
+}
+
+function renderTaskWithChildren(parent: Task, full: boolean, json: boolean, cwd: string): void {
+  if (json) {
+    const root: ChildrenJsonNode = {
+      task: parent,
+      children: buildChildrenJson(parent.id, full, cwd),
+    };
+    console.log(JSON.stringify(root, null, 2));
+    return;
+  }
+
+  // Text rendering
+  if (full) {
+    // Parent full + every descendant full, sorted by id (stable).
+    renderTaskFull(parent);
+    const descendants = getDescendants(parent.id, "all", cwd);
+    if (descendants.length === 0) {
+      console.log("");
+      console.log("  (no children)");
+      return;
+    }
+    for (const d of descendants) {
+      console.log("");
+      renderTaskFull(d, "  ");
+    }
+    return;
+  }
+
+  // Summary: parent full, then indented summary of direct children.
+  renderTaskFull(parent);
+  console.log("");
+  const directs = getDescendants(parent.id, "direct", cwd);
+  if (directs.length === 0) {
+    console.log("  (no children)");
+    return;
+  }
+  console.log("Children:");
+  for (const c of directs) {
+    console.log(`  ${c.id} — ${c.title} [${c.status}]`);
+  }
 }
 
 // ── Ready handler ───────────────────────────────────────

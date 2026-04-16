@@ -15,6 +15,7 @@ import {
   readProjectPrefix,
   queryFeatureTasks,
   getReadyTasks,
+  getDescendants,
   writeTasksFile,
   createEpic,
   createTask,
@@ -735,6 +736,159 @@ describe("getReadyTasks", () => {
     const result = getReadyTasks(tmpDir);
     // Unknown dep => can't verify it's closed/in_progress => blocked
     expect(result).toHaveLength(0);
+  });
+});
+
+// ─── getDescendants ─────────────────────────────────────────────────
+describe("getDescendants", () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = makeTmpDir();
+    mkdirSync(join(tmpDir, ".git"), { recursive: true });
+  });
+
+  afterEach(() => {
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("returns empty array when parent has no children (direct scope)", () => {
+    const data = makeTasksFile(
+      [{ id: "FORGE-1", title: "Epic", created: "2026-03-30" }],
+      [makeTask({ id: "FORGE-1.1", title: "Leaf" })],
+    );
+    writePlansDir(tmpDir, { "my-feature": data });
+
+    const result = getDescendants("FORGE-1.1", "direct", tmpDir);
+    expect(result).toEqual([]);
+  });
+
+  it("returns empty array when parent has no children (all scope)", () => {
+    const data = makeTasksFile(
+      [{ id: "FORGE-1", title: "Epic", created: "2026-03-30" }],
+      [makeTask({ id: "FORGE-1.1", title: "Leaf" })],
+    );
+    writePlansDir(tmpDir, { "my-feature": data });
+
+    const result = getDescendants("FORGE-1.1", "all", tmpDir);
+    expect(result).toEqual([]);
+  });
+
+  it("returns only direct children with scope='direct'", () => {
+    const data = makeTasksFile(
+      [{ id: "FORGE-3", title: "Epic", created: "2026-03-30" }],
+      [
+        makeTask({ id: "FORGE-3.1", title: "Direct child A" }),
+        makeTask({ id: "FORGE-3.2", title: "Direct child B" }),
+        makeTask({ id: "FORGE-3.1.1", title: "Grandchild" }),
+        makeTask({ id: "FORGE-3.1.2", title: "Grandchild 2" }),
+      ],
+    );
+    writePlansDir(tmpDir, { "my-feature": data });
+
+    const result = getDescendants("FORGE-3", "direct", tmpDir);
+    expect(result.map((t) => t.id)).toEqual(["FORGE-3.1", "FORGE-3.2"]);
+  });
+
+  it("returns all descendants with scope='all'", () => {
+    const data = makeTasksFile(
+      [{ id: "FORGE-3", title: "Epic", created: "2026-03-30" }],
+      [
+        makeTask({ id: "FORGE-3.1", title: "Direct child A" }),
+        makeTask({ id: "FORGE-3.2", title: "Direct child B" }),
+        makeTask({ id: "FORGE-3.1.1", title: "Grandchild" }),
+        makeTask({ id: "FORGE-3.1.2", title: "Grandchild 2" }),
+      ],
+    );
+    writePlansDir(tmpDir, { "my-feature": data });
+
+    const result = getDescendants("FORGE-3", "all", tmpDir);
+    expect(result.map((t) => t.id)).toEqual([
+      "FORGE-3.1",
+      "FORGE-3.1.1",
+      "FORGE-3.1.2",
+      "FORGE-3.2",
+    ]);
+  });
+
+  it("does not match tasks from unrelated prefixes", () => {
+    const data = makeTasksFile(
+      [
+        { id: "FORGE-3", title: "Epic 3", created: "2026-03-30" },
+        { id: "FORGE-30", title: "Epic 30", created: "2026-03-30" },
+      ],
+      [
+        makeTask({ id: "FORGE-3.1", title: "Child of 3" }),
+        makeTask({ id: "FORGE-30.1", title: "Child of 30 (not 3)" }),
+      ],
+    );
+    writePlansDir(tmpDir, { "my-feature": data });
+
+    // Only FORGE-3.x should match; FORGE-30.x must NOT be picked up.
+    const result = getDescendants("FORGE-3", "all", tmpDir);
+    expect(result.map((t) => t.id)).toEqual(["FORGE-3.1"]);
+  });
+
+  it("sorts descendants by id ascending", () => {
+    const data = makeTasksFile(
+      [{ id: "FORGE-3", title: "Epic", created: "2026-03-30" }],
+      [
+        makeTask({ id: "FORGE-3.2", title: "B" }),
+        makeTask({ id: "FORGE-3.1", title: "A" }),
+        makeTask({ id: "FORGE-3.1.2", title: "A2" }),
+        makeTask({ id: "FORGE-3.1.1", title: "A1" }),
+      ],
+    );
+    writePlansDir(tmpDir, { "my-feature": data });
+
+    const result = getDescendants("FORGE-3", "all", tmpDir);
+    expect(result.map((t) => t.id)).toEqual([
+      "FORGE-3.1",
+      "FORGE-3.1.1",
+      "FORGE-3.1.2",
+      "FORGE-3.2",
+    ]);
+  });
+
+  it("returns full Task objects, not ReadyTask projections", () => {
+    const data = makeTasksFile(
+      [{ id: "FORGE-1", title: "Epic", created: "2026-03-30" }],
+      [
+        makeTask({
+          id: "FORGE-1.1",
+          title: "Full fields",
+          description: "desc",
+          design: "design text",
+          acceptance: ["must X"],
+          notes: "some notes",
+        }),
+      ],
+    );
+    writePlansDir(tmpDir, { "my-feature": data });
+
+    const result = getDescendants("FORGE-1", "direct", tmpDir);
+    expect(result).toHaveLength(1);
+    expect(result[0].description).toBe("desc");
+    expect(result[0].design).toBe("design text");
+    expect(result[0].acceptance).toEqual(["must X"]);
+    expect(result[0].notes).toBe("some notes");
+  });
+
+  it("picks up descendants across multiple feature files", () => {
+    // Cross-file is defensive: normally a parent ID lives in one file, but
+    // getDescendants walks all tasks to be resilient to misplacement.
+    const dataA = makeTasksFile(
+      [{ id: "FORGE-3", title: "Epic", created: "2026-03-30" }],
+      [makeTask({ id: "FORGE-3.1", title: "A-side child" })],
+    );
+    const dataB = makeTasksFile(
+      [{ id: "OTHER-1", title: "Other", created: "2026-03-30" }],
+      [makeTask({ id: "FORGE-3.2", title: "B-side child" })],
+    );
+    writePlansDir(tmpDir, { alpha: dataA, beta: dataB });
+
+    const result = getDescendants("FORGE-3", "direct", tmpDir);
+    expect(result.map((t) => t.id)).toEqual(["FORGE-3.1", "FORGE-3.2"]);
   });
 });
 

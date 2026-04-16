@@ -192,3 +192,47 @@ export function getReadyTasks(
 
   return ready;
 }
+
+/**
+ * Get descendant tasks of a parent, by ID-prefix walk.
+ *
+ * Direction: parent DOWN (inverse of the container-detection logic in
+ * getReadyTasks, which walks leaves UP). We iterate all tasks across all
+ * feature files and pick those whose id starts with `${parentId}.`.
+ *
+ * - scope 'direct': only tasks exactly one dot-level below the parent.
+ *   e.g., parentId='FORGE-3' matches 'FORGE-3.1' but NOT 'FORGE-3.1.1'.
+ * - scope 'all': every descendant at any depth.
+ *
+ * Result is sorted by id ascending for deterministic output.
+ */
+export function getDescendants(
+  parentId: string,
+  scope: "direct" | "all",
+  cwd?: string,
+): Task[] {
+  const root = resolveRepoRoot(cwd);
+  const allFiles = discoverTaskFilesFromRoot(root);
+  const allTasks: Task[] = [];
+  for (const filePath of allFiles) {
+    const file = readTasksFile(filePath);
+    if (file) allTasks.push(...file.tasks);
+  }
+
+  const prefix = `${parentId}.`;
+  const matches: Task[] = [];
+
+  for (const task of allTasks) {
+    if (!task.id.startsWith(prefix)) continue;
+    if (scope === "direct") {
+      // Suffix after parent prefix must have no internal dots (i.e. is the
+      // direct child segment, not a deeper descendant).
+      const suffix = task.id.slice(prefix.length);
+      if (suffix.includes(".")) continue;
+    }
+    matches.push(task);
+  }
+
+  matches.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  return matches;
+}
