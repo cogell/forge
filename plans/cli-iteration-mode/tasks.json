@@ -11,7 +11,7 @@
     {
       "id": "FORGE-3.1",
       "title": "Land named constants + Phase 1 dispatcher tokens",
-      "status": "open",
+      "status": "closed",
       "priority": 1,
       "labels": [
         "complexity:3",
@@ -31,12 +31,12 @@
       "notes": "Files: src/lib/tasks/types.ts (modify), src/commands/tasks.ts (modify). No test additions expected; existing tests must stay green.",
       "dependencies": [],
       "comments": [],
-      "closeReason": null
+      "closeReason": "completed"
     },
     {
       "id": "FORGE-3.2",
       "title": "Implement forge tasks delete with descendant-scan",
-      "status": "open",
+      "status": "closed",
       "priority": 2,
       "labels": [
         "complexity:5",
@@ -59,12 +59,12 @@
         "FORGE-3.1"
       ],
       "comments": [],
-      "closeReason": null
+      "closeReason": "completed"
     },
     {
       "id": "FORGE-3.3",
       "title": "Extend forge tasks create with --blocked-by flag",
-      "status": "open",
+      "status": "closed",
       "priority": 2,
       "labels": [
         "complexity:4",
@@ -86,12 +86,12 @@
         "FORGE-3.1"
       ],
       "comments": [],
-      "closeReason": null
+      "closeReason": "completed"
     },
     {
       "id": "FORGE-3.4",
       "title": "Extend forge tasks ready with --label and --phase filters",
-      "status": "open",
+      "status": "closed",
       "priority": 2,
       "labels": [
         "complexity:5",
@@ -116,12 +116,12 @@
         "FORGE-3.1"
       ],
       "comments": [],
-      "closeReason": null
+      "closeReason": "completed"
     },
     {
       "id": "FORGE-3.5",
       "title": "Extend forge tasks show with --children and --full recursion",
-      "status": "open",
+      "status": "closed",
       "priority": 2,
       "labels": [
         "complexity:5",
@@ -145,12 +145,12 @@
         "FORGE-3.1"
       ],
       "comments": [],
-      "closeReason": null
+      "closeReason": "completed"
     },
     {
       "id": "FORGE-3.6",
       "title": "Extend forge tasks epic create with --id flag",
-      "status": "open",
+      "status": "closed",
       "priority": 2,
       "labels": [
         "complexity:4",
@@ -172,12 +172,12 @@
         "FORGE-3.1"
       ],
       "comments": [],
-      "closeReason": null
+      "closeReason": "completed"
     },
     {
       "id": "FORGE-3.7",
       "title": "Add --replace flag to forge tasks update --acceptance",
-      "status": "open",
+      "status": "closed",
       "priority": 2,
       "labels": [
         "complexity:3",
@@ -199,7 +199,7 @@
         "FORGE-3.1"
       ],
       "comments": [],
-      "closeReason": null
+      "closeReason": "completed"
     }
   ]
 }

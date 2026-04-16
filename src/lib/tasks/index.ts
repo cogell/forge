@@ -10,6 +10,9 @@ export {
   SCHEMA_VERSION,
   TASKS_FILENAME,
   MAX_NESTING_DEPTH,
+  GATE_LABEL_HUMAN,
+  PHASE_LABEL_PREFIX,
+  COMMIT_PLAN_TEMPLATE,
   type TaskStatus,
   type Comment,
   type Epic,
@@ -29,7 +32,7 @@ export { readProjectPrefix, isValidPrefix } from "./config";
 export { resolveTasksPath, discoverTaskFiles, readTasksFile } from "./io";
 
 // Queries
-export { queryFeatureTasks, getReadyTasks } from "./queries";
+export { queryFeatureTasks, getReadyTasks, getDescendants } from "./queries";
 
 // Mutations
 export {
@@ -42,6 +45,8 @@ export {
   updateTask,
   addComment,
   addLabel,
+  deleteTask,
+  type DeletePreview,
 } from "./mutations";
 
 // Validation

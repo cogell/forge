@@ -19,12 +19,15 @@ import {
   updateTask,
   addComment,
   addLabel,
+  deleteTask,
   validateDag,
   discoverTaskFiles,
   getReadyTasks,
+  getDescendants,
   resolveTasksPath,
   SCHEMA_VERSION,
   TASKS_FILENAME,
+  PHASE_LABEL_PREFIX,
   type ValidateScope,
   type TasksFile,
   type Task,
@@ -34,7 +37,7 @@ import {
 
 const RESERVED = [
   "ready", "list", "show", "create", "close", "update",
-  "comment", "label", "dep", "validate", "epic",
+  "comment", "label", "dep", "validate", "epic", "delete",
 ];
 
 const VALID_STATUSES: TaskStatus[] = ["open", "in_progress", "closed"];
@@ -44,11 +47,13 @@ const VALUE_FLAGS = new Set([
   "--parent", "--priority", "-p", "--acceptance", "-a", "--label", "-l",
   "-d", "--description", "--design", "--notes",
   "--status", "--title", "--reason",
+  "--blocked-by", "--phase", "--id",
 ]);
 
 /** Boolean flags that don't consume a value. */
 const BOOLEAN_FLAGS = new Set([
   "--json", "--project", "--force", "--help", "-h",
+  "--confirm", "--children", "--full", "--replace",
 ]);
 
 const TASKS_HELP = `
@@ -64,6 +69,7 @@ Subcommands:
   epic create <feature|--project> "title"   Create an epic
   update <task-id> [--field value...]       Update task fields
   close <task-id>                           Close a task (validates dependencies)
+  delete <task-id> --confirm                Delete a task (refuses if it has descendants)
   comment <task-id> "message"               Add a comment to a task
   label <task-id> <label>                   Add a label to a task
   dep add|remove <blocked> <blocker>        Manage task dependencies
@@ -101,7 +107,10 @@ Arguments:
   task-id         The ID to look up (e.g. TEST-1 for epic, TEST-1.2 for task)
 
 Options:
-  --json          Output as JSON
+  --children      Render the parent plus a summary of its direct children
+  --full          Render full task fields. Combined with --children, recurses
+                  through all descendants and renders every field.
+  --json          Output as JSON (structured {task, children} when --children)
   --help, -h      Show this help
 
 Note: The task ID is looked up across all feature files automatically —
@@ -117,8 +126,10 @@ Arguments:
   feature         Filter to a specific feature (omit to scan all)
 
 Options:
-  --json          Output as JSON
-  --help, -h      Show this help
+  --label, -l <L>  Only include tasks whose labels contain L (repeatable, AND)
+  --phase <N>      Sugar for --label phase:N (composes with --label)
+  --json           Output as JSON
+  --help, -h       Show this help
 `.trim(),
 
   create: `
@@ -135,6 +146,7 @@ Options:
   --priority, -p <0-4>   Priority level (default: 2)
   --acceptance, -a <txt>  Acceptance criterion (repeatable)
   --label, -l <label>    Label to add (repeatable)
+  --blocked-by <id>      Blocker task ID for dependency (repeatable)
   -d, --description <t>  Short description
   --design <text>        Design notes
   --notes <text>         Implementation notes
@@ -146,13 +158,16 @@ Options:
   epic: `
 forge tasks epic — manage epics
 
-Usage: forge tasks epic create <feature|--project> "title"
+Usage: forge tasks epic create <feature|--project> "title" [--id <explicit-id>]
 
 Arguments:
   feature         The feature this epic belongs to
   title           Epic title (quoted string)
 
 Options:
+  --id <id>       Use explicit epic ID (e.g. FORGE-9). Rejected if it
+                  collides with any existing epic across the project.
+                  Without --id, the next sequential ID is assigned.
   --project       Create a project-level epic
   --json          Output as JSON
   --help, -h      Show this help
@@ -174,11 +189,34 @@ Options:
   --design <text>        Design notes
   --notes <text>         Implementation notes
   --acceptance, -a <txt>  Append acceptance criterion (repeatable)
+  --replace              When paired with --acceptance, replace the task's
+                         acceptance[] array instead of appending. No-op if
+                         --acceptance is not also provided.
   --label, -l <label>    Append label (repeatable, idempotent)
   --json                 Output as JSON
   --help, -h             Show this help
 
 Note: To close a task, use 'forge tasks close <id>' instead.
+`.trim(),
+
+  delete: `
+forge tasks delete — delete a task
+
+Usage: forge tasks delete <task-id> [--confirm]
+
+Arguments:
+  task-id         The task to delete (looked up across all features)
+
+Options:
+  --confirm       Actually perform the delete (without it, prints a preview)
+  --json          Output as JSON
+  --help, -h      Show this help
+
+Notes:
+  - Without --confirm, prints a preview and exits 0 (no write performed).
+  - Refuses to delete a task that has any descendants (ID-prefix match).
+  - On successful delete, strips the task's ID from every other task's
+    dependencies[] across all feature files.
 `.trim(),
 
   close: `
@@ -340,8 +378,9 @@ async function tasksInner(args: string[], json: boolean, project: boolean): Prom
       case "validate": return handleValidate(positional, json, project, cwd);
       case "dep": return handleDep(positional, json, cwd);
       case "list": return handleList(positional, json, project, cwd);
-      case "show": return handleShow(positional, json, cwd);
-      case "ready": return handleReady(positional, json, cwd);
+      case "show": return handleShow(positional, args, json, cwd);
+      case "ready": return handleReady(args, positional, json, cwd);
+      case "delete": return handleDelete(positional, args, json, cwd);
       default:
         fail(`Subcommand "${subcommand}" is not yet implemented.`);
     }
@@ -402,7 +441,7 @@ async function handleScaffold(
 // ── Epic create handler ─────────────────────────────────
 
 async function handleEpic(
-  _args: string[],
+  args: string[],
   positional: string[],
   json: boolean,
   project: boolean,
@@ -427,10 +466,30 @@ async function handleEpic(
   if (!title) fail('Missing epic title. Usage: forge tasks epic create <feature|--project> "title"');
   if (!project && !feature) fail('Missing feature name. Usage: forge tasks epic create <feature> "title"');
 
-  const id = await createEpic(feature, title, cwd);
+  // Parse optional --id flag. VALUE_FLAGS already recognises --id so
+  // extractPositional excludes its value from positional[] — we re-scan
+  // args[] here to recover it.
+  let explicitId: string | undefined;
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === "--id" && args[i + 1]) {
+      explicitId = args[i + 1];
+      break;
+    }
+  }
 
-  if (json) console.log(JSON.stringify({ id, title, feature: feature || "project" }));
-  else console.log(`Created epic: ${id} — ${title}`);
+  try {
+    const id = await createEpic(
+      feature,
+      title,
+      cwd,
+      explicitId !== undefined ? { explicitId } : undefined
+    );
+
+    if (json) console.log(JSON.stringify({ id, title, feature: feature || "project" }));
+    else console.log(`Created epic: ${id} — ${title}`);
+  } catch (err) {
+    fail((err as Error).message);
+  }
 }
 
 // ── Create task handler ─────────────────────────────────
@@ -461,6 +520,7 @@ async function handleCreate(
   let priority: number | undefined;
   const acceptance: string[] = [];
   const labels: string[] = [];
+  const blockedBy: string[] = [];
   let description: string | undefined;
   let design: string | undefined;
   let notes: string | undefined;
@@ -478,6 +538,7 @@ async function handleCreate(
     }
     else if ((arg === "--acceptance" || arg === "-a") && next) { acceptance.push(next); i++; }
     else if ((arg === "--label" || arg === "-l") && next) { labels.push(next); i++; }
+    else if (arg === "--blocked-by" && next) { blockedBy.push(next); i++; }
     else if ((arg === "-d" || arg === "--description") && next) { description = next; i++; }
     else if (arg === "--design" && next) { design = next; i++; }
     else if (arg === "--notes" && next) { notes = next; i++; }
@@ -498,13 +559,18 @@ async function handleCreate(
     }
   }
 
-  const id = await createTask(feature, title, parentId, {
-    priority, labels: labels.length > 0 ? labels : undefined,
-    description, design, acceptance: acceptance.length > 0 ? acceptance : undefined, notes,
-  }, cwd);
+  try {
+    const id = await createTask(feature, title, parentId, {
+      priority, labels: labels.length > 0 ? labels : undefined,
+      description, design, acceptance: acceptance.length > 0 ? acceptance : undefined, notes,
+      blockedBy: blockedBy.length > 0 ? blockedBy : undefined,
+    }, cwd);
 
-  if (json) console.log(JSON.stringify({ id, title, parent: parentId, feature: feature || "project" }));
-  else console.log(`Created task: ${id} — ${title}`);
+    if (json) console.log(JSON.stringify({ id, title, parent: parentId, feature: feature || "project" }));
+    else console.log(`Created task: ${id} — ${title}`);
+  } catch (err) {
+    fail((err as Error).message);
+  }
 }
 
 // ── Dep add/remove handler ──────────────────────────────
@@ -567,10 +633,12 @@ async function handleUpdate(args: string[], positional: string[], json: boolean,
   const fields: Partial<Pick<Task, "status" | "priority" | "title" | "description" | "design" | "notes">> & {
     addAcceptance?: string[];
     addLabels?: string[];
+    replaceAcceptance?: boolean;
   } = {};
 
   const acceptance: string[] = [];
   const labels: string[] = [];
+  const replace = args.includes("--replace");
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
@@ -599,12 +667,19 @@ async function handleUpdate(args: string[], positional: string[], json: boolean,
 
   if (acceptance.length > 0) fields.addAcceptance = acceptance;
   if (labels.length > 0) fields.addLabels = labels;
+  if (replace && acceptance.length > 0) fields.replaceAcceptance = true;
+
+  // --replace without --acceptance is a no-op: exit 0, no write, no error.
+  if (replace && acceptance.length === 0 && Object.keys(fields).length === 0) {
+    if (json) console.log(JSON.stringify({ status: "noop", id }));
+    return;
+  }
 
   if (Object.keys(fields).length === 0) {
     fail(
       "No fields to update. Available flags:\n" +
       "  --status, --priority/-p, --title, -d/--description,\n" +
-      "  --design, --notes, --acceptance/-a, --label/-l\n" +
+      "  --design, --notes, --acceptance/-a, --label/-l, --replace\n" +
       "See also: forge tasks close, forge tasks comment, forge tasks dep"
     );
   }
@@ -740,9 +815,17 @@ function outputTaskList(data: TasksFile, json: boolean): void {
 
 // ── Show handler ────────────────────────────────────────
 
-async function handleShow(positional: string[], json: boolean, cwd: string): Promise<void> {
+async function handleShow(
+  positional: string[],
+  args: string[],
+  json: boolean,
+  cwd: string,
+): Promise<void> {
   const taskId = positional[1];
-  if (!taskId) fail("Usage: forge tasks show <task-id> [--json]");
+  if (!taskId) fail("Usage: forge tasks show <task-id> [--json] [--children] [--full]");
+
+  const withChildren = args.includes("--children");
+  const full = args.includes("--full");
 
   const files = discoverTaskFiles(cwd);
   for (const filePath of files) {
@@ -767,26 +850,15 @@ async function handleShow(positional: string[], json: boolean, cwd: string): Pro
 
     const task = data.tasks.find((t) => t.id === taskId);
     if (task) {
-      if (json) { console.log(JSON.stringify(task, null, 2)); return; }
-
-      console.log(`Task: ${task.id}`);
-      console.log(`Title: ${task.title}`);
-      console.log(`Status: ${task.status}`);
-      console.log(`Priority: P${task.priority}`);
-      if (task.labels.length > 0) console.log(`Labels: ${task.labels.join(", ")}`);
-      if (task.description) console.log(`\nDescription:\n  ${task.description}`);
-      if (task.design) console.log(`\nDesign:\n  ${task.design}`);
-      if (task.acceptance.length > 0) {
-        console.log(`\nAcceptance Criteria:`);
-        for (const ac of task.acceptance) console.log(`  - ${ac}`);
+      if (withChildren) {
+        renderTaskWithChildren(task, full, json, cwd);
+      } else {
+        if (json) {
+          console.log(JSON.stringify(task, null, 2));
+        } else {
+          renderTaskFull(task);
+        }
       }
-      if (task.notes) console.log(`\nNotes:\n  ${task.notes}`);
-      if (task.dependencies.length > 0) console.log(`\nDependencies: ${task.dependencies.join(", ")}`);
-      if (task.comments.length > 0) {
-        console.log(`\nComments:`);
-        for (const c of task.comments) console.log(`  [${c.timestamp}] ${c.message}`);
-      }
-      if (task.closeReason) console.log(`\nClose Reason: ${task.closeReason}`);
       return;
     }
   }
@@ -794,12 +866,112 @@ async function handleShow(positional: string[], json: boolean, cwd: string): Pro
   fail(`Task "${taskId}" not found. Usage: forge tasks show <task-id> [--json]`);
 }
 
+/** Render a single task's full fields as text. */
+function renderTaskFull(task: Task, indent: string = ""): void {
+  const ind = indent;
+  console.log(`${ind}Task: ${task.id}`);
+  console.log(`${ind}Title: ${task.title}`);
+  console.log(`${ind}Status: ${task.status}`);
+  console.log(`${ind}Priority: P${task.priority}`);
+  if (task.labels.length > 0) console.log(`${ind}Labels: ${task.labels.join(", ")}`);
+  if (task.description) console.log(`\n${ind}Description:\n${ind}  ${task.description}`);
+  if (task.design) console.log(`\n${ind}Design:\n${ind}  ${task.design}`);
+  if (task.acceptance.length > 0) {
+    console.log(`\n${ind}Acceptance Criteria:`);
+    for (const ac of task.acceptance) console.log(`${ind}  - ${ac}`);
+  }
+  if (task.notes) console.log(`\n${ind}Notes:\n${ind}  ${task.notes}`);
+  if (task.dependencies.length > 0) console.log(`\n${ind}Dependencies: ${task.dependencies.join(", ")}`);
+  if (task.comments.length > 0) {
+    console.log(`\n${ind}Comments:`);
+    for (const c of task.comments) console.log(`${ind}  [${c.timestamp}] ${c.message}`);
+  }
+  if (task.closeReason) console.log(`\n${ind}Close Reason: ${task.closeReason}`);
+}
+
+/**
+ * Recursive JSON shape: { task, children: [{ task, children: [...] }] }.
+ *
+ * direct children: one-level-deep for the given parent.
+ * all descendants: when full=true, nest recursively so the shape mirrors
+ *                  the tree even though getDescendants returns flat arrays.
+ */
+interface ChildrenJsonNode {
+  task: Task;
+  children: ChildrenJsonNode[];
+}
+
+function buildChildrenJson(parentId: string, full: boolean, cwd: string): ChildrenJsonNode[] {
+  const direct = getDescendants(parentId, "direct", cwd);
+  if (!full) {
+    return direct.map((t) => ({ task: t, children: [] }));
+  }
+  return direct.map((t) => ({
+    task: t,
+    children: buildChildrenJson(t.id, true, cwd),
+  }));
+}
+
+function renderTaskWithChildren(parent: Task, full: boolean, json: boolean, cwd: string): void {
+  if (json) {
+    const root: ChildrenJsonNode = {
+      task: parent,
+      children: buildChildrenJson(parent.id, full, cwd),
+    };
+    console.log(JSON.stringify(root, null, 2));
+    return;
+  }
+
+  // Text rendering
+  if (full) {
+    // Parent full + every descendant full, sorted by id (stable).
+    renderTaskFull(parent);
+    const descendants = getDescendants(parent.id, "all", cwd);
+    if (descendants.length === 0) {
+      console.log("");
+      console.log("  (no children)");
+      return;
+    }
+    for (const d of descendants) {
+      console.log("");
+      renderTaskFull(d, "  ");
+    }
+    return;
+  }
+
+  // Summary: parent full, then indented summary of direct children.
+  renderTaskFull(parent);
+  console.log("");
+  const directs = getDescendants(parent.id, "direct", cwd);
+  if (directs.length === 0) {
+    console.log("  (no children)");
+    return;
+  }
+  console.log("Children:");
+  for (const c of directs) {
+    console.log(`  ${c.id} — ${c.title} [${c.status}]`);
+  }
+}
+
 // ── Ready handler ───────────────────────────────────────
 
-async function handleReady(positional: string[], json: boolean, cwd: string): Promise<void> {
+async function handleReady(args: string[], positional: string[], json: boolean, cwd: string): Promise<void> {
   // --project is intentionally ignored: ready always scans all files when no feature specified
   const feature = positional[1] || undefined;
-  const ready = getReadyTasks(cwd, feature);
+
+  // Collect repeatable --label/-l and optional --phase <N> (sugar for --label phase:N)
+  const labels: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    const next = args[i + 1];
+    if ((arg === "--label" || arg === "-l") && next) { labels.push(next); i++; }
+    else if (arg === "--phase" && next) {
+      labels.push(`${PHASE_LABEL_PREFIX}${next}`);
+      i++;
+    }
+  }
+
+  const ready = getReadyTasks(cwd, feature, labels.length > 0 ? { labels } : undefined);
 
   if (json) { console.log(JSON.stringify(ready, null, 2)); return; }
 
@@ -810,6 +982,55 @@ async function handleReady(positional: string[], json: boolean, cwd: string): Pr
   for (const task of ready) {
     const lbl = task.labels.length > 0 ? task.labels.join(", ") : "";
     console.log(`${task.id.padEnd(20)} ${task.title.slice(0, 40).padEnd(40)} P${task.priority}   ${lbl}`);
+  }
+}
+
+// ── Delete handler ──────────────────────────────────────
+
+async function handleDelete(
+  positional: string[],
+  args: string[],
+  json: boolean,
+  cwd: string
+): Promise<void> {
+  const id = positional[1];
+  if (!id) fail("Usage: forge tasks delete <task-id> [--confirm]");
+
+  const confirm = args.includes("--confirm");
+
+  try {
+    const result = await deleteTask(id, { confirm }, cwd);
+
+    if (!confirm) {
+      // Dry-run: print preview and exit 0 so scripts can chain `&&`.
+      // If the task has descendants, confirm would be refused — we surface
+      // that via the WARNING banner but still exit 0, because the dry run
+      // itself succeeded.
+      const preview = result!;
+      if (json) {
+        console.log(JSON.stringify({ status: "preview", ...preview }));
+      } else {
+        console.log(`Would delete ${preview.id} — ${preview.title}`);
+        if (preview.descendants.length > 0) {
+          console.log(`\nWARNING: ${preview.id} has ${preview.descendants.length} descendant(s):`);
+          for (const d of preview.descendants) console.log(`  - ${d}`);
+          console.log(`\nRefusing to delete a task with descendants. Delete children first.`);
+        } else {
+          console.log(`(no descendants)`);
+        }
+        if (preview.dependents.length > 0) {
+          console.log(`\n${preview.dependents.length} task(s) list ${preview.id} as a dependency and would be cleaned up:`);
+          for (const d of preview.dependents) console.log(`  - ${d}`);
+        }
+        console.log(`\nRe-run with --confirm to perform the delete.`);
+      }
+      return;
+    }
+
+    if (json) console.log(JSON.stringify({ status: "deleted", id }));
+    else console.log(`Deleted task ${id}`);
+  } catch (err) {
+    fail((err as Error).message);
   }
 }
 

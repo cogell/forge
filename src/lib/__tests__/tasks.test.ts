@@ -15,6 +15,7 @@ import {
   readProjectPrefix,
   queryFeatureTasks,
   getReadyTasks,
+  getDescendants,
   writeTasksFile,
   createEpic,
   createTask,
@@ -24,6 +25,7 @@ import {
   updateTask,
   addComment,
   addLabel,
+  deleteTask,
   validateDag,
   resolveTasksPath,
   isValidPrefix,
@@ -737,6 +739,159 @@ describe("getReadyTasks", () => {
   });
 });
 
+// ─── getDescendants ─────────────────────────────────────────────────
+describe("getDescendants", () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = makeTmpDir();
+    mkdirSync(join(tmpDir, ".git"), { recursive: true });
+  });
+
+  afterEach(() => {
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("returns empty array when parent has no children (direct scope)", () => {
+    const data = makeTasksFile(
+      [{ id: "FORGE-1", title: "Epic", created: "2026-03-30" }],
+      [makeTask({ id: "FORGE-1.1", title: "Leaf" })],
+    );
+    writePlansDir(tmpDir, { "my-feature": data });
+
+    const result = getDescendants("FORGE-1.1", "direct", tmpDir);
+    expect(result).toEqual([]);
+  });
+
+  it("returns empty array when parent has no children (all scope)", () => {
+    const data = makeTasksFile(
+      [{ id: "FORGE-1", title: "Epic", created: "2026-03-30" }],
+      [makeTask({ id: "FORGE-1.1", title: "Leaf" })],
+    );
+    writePlansDir(tmpDir, { "my-feature": data });
+
+    const result = getDescendants("FORGE-1.1", "all", tmpDir);
+    expect(result).toEqual([]);
+  });
+
+  it("returns only direct children with scope='direct'", () => {
+    const data = makeTasksFile(
+      [{ id: "FORGE-3", title: "Epic", created: "2026-03-30" }],
+      [
+        makeTask({ id: "FORGE-3.1", title: "Direct child A" }),
+        makeTask({ id: "FORGE-3.2", title: "Direct child B" }),
+        makeTask({ id: "FORGE-3.1.1", title: "Grandchild" }),
+        makeTask({ id: "FORGE-3.1.2", title: "Grandchild 2" }),
+      ],
+    );
+    writePlansDir(tmpDir, { "my-feature": data });
+
+    const result = getDescendants("FORGE-3", "direct", tmpDir);
+    expect(result.map((t) => t.id)).toEqual(["FORGE-3.1", "FORGE-3.2"]);
+  });
+
+  it("returns all descendants with scope='all'", () => {
+    const data = makeTasksFile(
+      [{ id: "FORGE-3", title: "Epic", created: "2026-03-30" }],
+      [
+        makeTask({ id: "FORGE-3.1", title: "Direct child A" }),
+        makeTask({ id: "FORGE-3.2", title: "Direct child B" }),
+        makeTask({ id: "FORGE-3.1.1", title: "Grandchild" }),
+        makeTask({ id: "FORGE-3.1.2", title: "Grandchild 2" }),
+      ],
+    );
+    writePlansDir(tmpDir, { "my-feature": data });
+
+    const result = getDescendants("FORGE-3", "all", tmpDir);
+    expect(result.map((t) => t.id)).toEqual([
+      "FORGE-3.1",
+      "FORGE-3.1.1",
+      "FORGE-3.1.2",
+      "FORGE-3.2",
+    ]);
+  });
+
+  it("does not match tasks from unrelated prefixes", () => {
+    const data = makeTasksFile(
+      [
+        { id: "FORGE-3", title: "Epic 3", created: "2026-03-30" },
+        { id: "FORGE-30", title: "Epic 30", created: "2026-03-30" },
+      ],
+      [
+        makeTask({ id: "FORGE-3.1", title: "Child of 3" }),
+        makeTask({ id: "FORGE-30.1", title: "Child of 30 (not 3)" }),
+      ],
+    );
+    writePlansDir(tmpDir, { "my-feature": data });
+
+    // Only FORGE-3.x should match; FORGE-30.x must NOT be picked up.
+    const result = getDescendants("FORGE-3", "all", tmpDir);
+    expect(result.map((t) => t.id)).toEqual(["FORGE-3.1"]);
+  });
+
+  it("sorts descendants by id ascending", () => {
+    const data = makeTasksFile(
+      [{ id: "FORGE-3", title: "Epic", created: "2026-03-30" }],
+      [
+        makeTask({ id: "FORGE-3.2", title: "B" }),
+        makeTask({ id: "FORGE-3.1", title: "A" }),
+        makeTask({ id: "FORGE-3.1.2", title: "A2" }),
+        makeTask({ id: "FORGE-3.1.1", title: "A1" }),
+      ],
+    );
+    writePlansDir(tmpDir, { "my-feature": data });
+
+    const result = getDescendants("FORGE-3", "all", tmpDir);
+    expect(result.map((t) => t.id)).toEqual([
+      "FORGE-3.1",
+      "FORGE-3.1.1",
+      "FORGE-3.1.2",
+      "FORGE-3.2",
+    ]);
+  });
+
+  it("returns full Task objects, not ReadyTask projections", () => {
+    const data = makeTasksFile(
+      [{ id: "FORGE-1", title: "Epic", created: "2026-03-30" }],
+      [
+        makeTask({
+          id: "FORGE-1.1",
+          title: "Full fields",
+          description: "desc",
+          design: "design text",
+          acceptance: ["must X"],
+          notes: "some notes",
+        }),
+      ],
+    );
+    writePlansDir(tmpDir, { "my-feature": data });
+
+    const result = getDescendants("FORGE-1", "direct", tmpDir);
+    expect(result).toHaveLength(1);
+    expect(result[0].description).toBe("desc");
+    expect(result[0].design).toBe("design text");
+    expect(result[0].acceptance).toEqual(["must X"]);
+    expect(result[0].notes).toBe("some notes");
+  });
+
+  it("picks up descendants across multiple feature files", () => {
+    // Cross-file is defensive: normally a parent ID lives in one file, but
+    // getDescendants walks all tasks to be resilient to misplacement.
+    const dataA = makeTasksFile(
+      [{ id: "FORGE-3", title: "Epic", created: "2026-03-30" }],
+      [makeTask({ id: "FORGE-3.1", title: "A-side child" })],
+    );
+    const dataB = makeTasksFile(
+      [{ id: "OTHER-1", title: "Other", created: "2026-03-30" }],
+      [makeTask({ id: "FORGE-3.2", title: "B-side child" })],
+    );
+    writePlansDir(tmpDir, { alpha: dataA, beta: dataB });
+
+    const result = getDescendants("FORGE-3", "direct", tmpDir);
+    expect(result.map((t) => t.id)).toEqual(["FORGE-3.1", "FORGE-3.2"]);
+  });
+});
+
 // ─── readProjectPrefix ──────────────────────────────────────────────
 describe("readProjectPrefix", () => {
   let tmpDir: string;
@@ -909,6 +1064,89 @@ describe("createEpic", () => {
     const data = readJson(join(tmpDir, "plans", "auth", TASKS_FILENAME));
     expect(data.epics).toHaveLength(2);
   });
+
+  // ── explicitId option (FORGE-3.6) ─────────────────────────────
+
+  it("creates epic with explicit id when --id matches prefix shape", async () => {
+    setupFeature(tmpDir, "auth");
+    const id = await createEpic("auth", "Pinned", tmpDir, { explicitId: "FORGE-9" });
+    expect(id).toBe("FORGE-9");
+    const data = readJson(join(tmpDir, "plans", "auth", TASKS_FILENAME));
+    expect(data.epics).toHaveLength(1);
+    expect(data.epics[0].id).toBe("FORGE-9");
+    expect(data.epics[0].title).toBe("Pinned");
+  });
+
+  it("rejects malformed explicit id before acquiring the lock", async () => {
+    setupFeature(tmpDir, "auth");
+    await expect(createEpic("auth", "Bad", tmpDir, { explicitId: "BADFORMAT" })).rejects.toThrow(
+      /invalid epic id BADFORMAT: expected FORGE-<number>/
+    );
+    // Lock must not have been acquired — no .epic-lock file left behind as a side effect
+    // and no partial write occurred. tasks.json is still empty.
+    const filePath = join(tmpDir, "plans", "auth", TASKS_FILENAME);
+    expect(existsSync(filePath)).toBe(false);
+  });
+
+  it("rejects explicit id with wrong prefix", async () => {
+    setupFeature(tmpDir, "auth");
+    await expect(createEpic("auth", "X", tmpDir, { explicitId: "OTHER-1" })).rejects.toThrow(
+      /invalid epic id OTHER-1: expected FORGE-<number>/
+    );
+  });
+
+  it("rejects explicit id with non-numeric suffix", async () => {
+    setupFeature(tmpDir, "auth");
+    await expect(createEpic("auth", "X", tmpDir, { explicitId: "FORGE-abc" })).rejects.toThrow(
+      /invalid epic id FORGE-abc: expected FORGE-<number>/
+    );
+  });
+
+  it("rejects explicit id that collides with an existing epic and names the conflicting feature+title", async () => {
+    setupFeature(tmpDir, "auth", {
+      version: 1,
+      epics: [{ id: "FORGE-9", title: "Original", created: "2026-03-30" }],
+      tasks: [],
+    });
+    setupFeature(tmpDir, "pipeline");
+    await expect(
+      createEpic("pipeline", "Duplicate", tmpDir, { explicitId: "FORGE-9" })
+    ).rejects.toThrow(/FORGE-9.*auth.*Original/);
+    // The pipeline tasks.json must remain unchanged (empty file absent).
+    expect(existsSync(join(tmpDir, "plans", "pipeline", TASKS_FILENAME))).toBe(false);
+    // And the auth file retains its original epic untouched.
+    const authData = readJson(join(tmpDir, "plans", "auth", TASKS_FILENAME));
+    expect(authData.epics).toHaveLength(1);
+    expect(authData.epics[0].title).toBe("Original");
+  });
+
+  it("detects collision against a project-level epic and names 'project' as the owning feature", async () => {
+    // Put an epic in the root plans/tasks.json (project-level)
+    mkdirSync(join(tmpDir, "plans"), { recursive: true });
+    writeFileSync(
+      join(tmpDir, "plans", TASKS_FILENAME),
+      JSON.stringify(
+        { version: 1, epics: [{ id: "FORGE-5", title: "Root epic", created: "2026-03-30" }], tasks: [] },
+        null,
+        2
+      ) + "\n"
+    );
+    setupFeature(tmpDir, "auth");
+    await expect(
+      createEpic("auth", "Dup", tmpDir, { explicitId: "FORGE-5" })
+    ).rejects.toThrow(/FORGE-5.*project.*Root epic/);
+  });
+
+  it("without --id, auto-increment behaviour is unchanged (ignores explicit holes)", async () => {
+    setupFeature(tmpDir, "auth", {
+      version: 1,
+      epics: [{ id: "FORGE-9", title: "Pinned", created: "2026-03-30" }],
+      tasks: [],
+    });
+    // maxN = 9, so next auto-increment = 10
+    const id = await createEpic("auth", "Next", tmpDir);
+    expect(id).toBe("FORGE-10");
+  });
 });
 
 describe("createTask", () => {
@@ -967,6 +1205,60 @@ describe("createTask", () => {
     expect(task.priority).toBe(1);
     expect(task.labels).toEqual(["c:5"]);
     expect(task.acceptance).toEqual(["a", "b"]);
+  });
+
+  it("accepts blockedBy and populates dependencies", async () => {
+    const existing: Task = { id: "FORGE-1.1", title: "Existing", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: null };
+    setupFeature(tmpDir, "auth", { version: 1, epics: [{ id: "FORGE-1", title: "Auth", created: "2026-03-30" }], tasks: [existing] });
+    await createTask("auth", "New", "FORGE-1", { blockedBy: ["FORGE-1.1"] }, tmpDir);
+    const newTask = readJson(join(tmpDir, "plans", "auth", TASKS_FILENAME)).tasks[1];
+    expect(newTask.dependencies).toEqual(["FORGE-1.1"]);
+  });
+
+  it("accepts multiple blockedBy ids", async () => {
+    const t1: Task = { id: "FORGE-1.1", title: "A", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: null };
+    const t2: Task = { id: "FORGE-1.2", title: "B", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: null };
+    setupFeature(tmpDir, "auth", { version: 1, epics: [{ id: "FORGE-1", title: "Auth", created: "2026-03-30" }], tasks: [t1, t2] });
+    await createTask("auth", "New", "FORGE-1", { blockedBy: ["FORGE-1.1", "FORGE-1.2"] }, tmpDir);
+    const newTask = readJson(join(tmpDir, "plans", "auth", TASKS_FILENAME)).tasks[2];
+    expect(newTask.dependencies).toEqual(["FORGE-1.1", "FORGE-1.2"]);
+  });
+
+  it("empty blockedBy leaves dependencies empty", async () => {
+    setupFeature(tmpDir, "auth", { version: 1, epics: [{ id: "FORGE-1", title: "Auth", created: "2026-03-30" }], tasks: [] });
+    await createTask("auth", "T", "FORGE-1", { blockedBy: [] }, tmpDir);
+    const newTask = readJson(join(tmpDir, "plans", "auth", TASKS_FILENAME)).tasks[0];
+    expect(newTask.dependencies).toEqual([]);
+  });
+
+  it("rejects unknown blockedBy id and does not modify tasks.json", async () => {
+    setupFeature(tmpDir, "auth", { version: 1, epics: [{ id: "FORGE-1", title: "Auth", created: "2026-03-30" }], tasks: [] });
+    const filePath = join(tmpDir, "plans", "auth", TASKS_FILENAME);
+    const before = readFileSync(filePath, "utf-8");
+    await expect(createTask("auth", "T", "FORGE-1", { blockedBy: ["FORGE-999"] }, tmpDir)).rejects.toThrow(/FORGE-999/);
+    expect(readFileSync(filePath, "utf-8")).toBe(before);
+  });
+
+  it("batch error names every unknown blockedBy id", async () => {
+    setupFeature(tmpDir, "auth", { version: 1, epics: [{ id: "FORGE-1", title: "Auth", created: "2026-03-30" }], tasks: [] });
+    let err: Error | null = null;
+    try {
+      await createTask("auth", "T", "FORGE-1", { blockedBy: ["FORGE-98", "FORGE-99"] }, tmpDir);
+    } catch (e) {
+      err = e as Error;
+    }
+    expect(err).not.toBeNull();
+    expect(err!.message).toContain("FORGE-98");
+    expect(err!.message).toContain("FORGE-99");
+  });
+
+  it("resolves blockedBy ids across feature files", async () => {
+    const otherTask: Task = { id: "FORGE-2.1", title: "Other", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: null };
+    setupFeature(tmpDir, "auth", { version: 1, epics: [{ id: "FORGE-1", title: "Auth", created: "2026-03-30" }], tasks: [] });
+    setupFeature(tmpDir, "pipeline", { version: 1, epics: [{ id: "FORGE-2", title: "Pipe", created: "2026-03-30" }], tasks: [otherTask] });
+    await createTask("auth", "New", "FORGE-1", { blockedBy: ["FORGE-2.1"] }, tmpDir);
+    const newTask = readJson(join(tmpDir, "plans", "auth", TASKS_FILENAME)).tasks[0];
+    expect(newTask.dependencies).toEqual(["FORGE-2.1"]);
   });
 });
 
@@ -1135,6 +1427,37 @@ describe("updateTask", () => {
     expect(task.title).toBe("New");
     expect(task.priority).toBe(1);
     expect(task.description).toBe("new");
+  });
+
+  it("replaceAcceptance overwrites existing acceptance array", async () => {
+    const tasks: Task[] = [
+      { id: "FORGE-1.1", title: "T", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: ["old-1", "old-2", "old-3"], notes: "", dependencies: [], comments: [], closeReason: null },
+    ];
+    setupFeature(tmpDir, "auth", { version: 1, epics: [{ id: "FORGE-1", title: "Auth", created: "2026-03-30" }], tasks });
+    await updateTask("FORGE-1.1", { addAcceptance: ["first", "second"], replaceAcceptance: true }, tmpDir);
+    const task = readJson(join(tmpDir, "plans", "auth", TASKS_FILENAME)).tasks[0];
+    expect(task.acceptance).toEqual(["first", "second"]);
+  });
+
+  it("replaceAcceptance without addAcceptance is a no-op (preserves existing)", async () => {
+    const tasks: Task[] = [
+      { id: "FORGE-1.1", title: "T", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: ["keep-1", "keep-2"], notes: "", dependencies: [], comments: [], closeReason: null },
+    ];
+    setupFeature(tmpDir, "auth", { version: 1, epics: [{ id: "FORGE-1", title: "Auth", created: "2026-03-30" }], tasks });
+    await updateTask("FORGE-1.1", { replaceAcceptance: true, title: "New title" }, tmpDir);
+    const task = readJson(join(tmpDir, "plans", "auth", TASKS_FILENAME)).tasks[0];
+    expect(task.acceptance).toEqual(["keep-1", "keep-2"]);
+    expect(task.title).toBe("New title");
+  });
+
+  it("without replaceAcceptance, addAcceptance appends (backward-compatible)", async () => {
+    const tasks: Task[] = [
+      { id: "FORGE-1.1", title: "T", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: ["existing"], notes: "", dependencies: [], comments: [], closeReason: null },
+    ];
+    setupFeature(tmpDir, "auth", { version: 1, epics: [{ id: "FORGE-1", title: "Auth", created: "2026-03-30" }], tasks });
+    await updateTask("FORGE-1.1", { addAcceptance: ["added"] }, tmpDir);
+    const task = readJson(join(tmpDir, "plans", "auth", TASKS_FILENAME)).tasks[0];
+    expect(task.acceptance).toEqual(["existing", "added"]);
   });
 });
 
@@ -1793,5 +2116,272 @@ describe("getReadyTasks priority sorting", () => {
     expect(ready[0].priority).toBe(0);
     expect(ready[1].priority).toBe(2);
     expect(ready[2].priority).toBe(4);
+  });
+});
+
+// ─── getReadyTasks label filter ──────────────────────────────────────
+
+describe("getReadyTasks label filter", () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = makeTmpDir();
+    mkdirSync(join(tmpDir, ".git"), { recursive: true });
+  });
+
+  afterEach(() => {
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("with no filter opts returns all ready tasks (backward compat)", () => {
+    const data = makeTasksFile(
+      [{ id: "feat-1", title: "Phase 1", created: "2026-03-30" }],
+      [
+        makeTask({ id: "feat-1.1", title: "A", status: "open", labels: ["frontend"] }),
+        makeTask({ id: "feat-1.2", title: "B", status: "open", labels: ["backend"] }),
+      ],
+    );
+    writePlansDir(tmpDir, { "my-feature": data });
+
+    const result = getReadyTasks(tmpDir);
+    expect(result.map((t) => t.id).sort()).toEqual(["feat-1.1", "feat-1.2"]);
+  });
+
+  it("filters to tasks containing a single label", () => {
+    const data = makeTasksFile(
+      [{ id: "feat-1", title: "Phase 1", created: "2026-03-30" }],
+      [
+        makeTask({ id: "feat-1.1", title: "A", status: "open", labels: ["gate:human"] }),
+        makeTask({ id: "feat-1.2", title: "B", status: "open", labels: ["backend"] }),
+        makeTask({ id: "feat-1.3", title: "C", status: "open", labels: [] }),
+      ],
+    );
+    writePlansDir(tmpDir, { "my-feature": data });
+
+    const result = getReadyTasks(tmpDir, undefined, { labels: ["gate:human"] });
+    expect(result).toHaveLength(1);
+    expect(result[0].id).toBe("feat-1.1");
+  });
+
+  it("AND semantics: two labels both required", () => {
+    const data = makeTasksFile(
+      [{ id: "feat-1", title: "Phase 1", created: "2026-03-30" }],
+      [
+        makeTask({ id: "feat-1.1", title: "A", status: "open", labels: ["frontend", "needs-design"] }),
+        makeTask({ id: "feat-1.2", title: "B", status: "open", labels: ["frontend"] }),
+        makeTask({ id: "feat-1.3", title: "C", status: "open", labels: ["needs-design"] }),
+        makeTask({ id: "feat-1.4", title: "D", status: "open", labels: [] }),
+      ],
+    );
+    writePlansDir(tmpDir, { "my-feature": data });
+
+    const result = getReadyTasks(tmpDir, undefined, { labels: ["frontend", "needs-design"] });
+    expect(result).toHaveLength(1);
+    expect(result[0].id).toBe("feat-1.1");
+  });
+
+  it("empty labels array behaves like no filter", () => {
+    const data = makeTasksFile(
+      [{ id: "feat-1", title: "Phase 1", created: "2026-03-30" }],
+      [
+        makeTask({ id: "feat-1.1", title: "A", status: "open", labels: ["frontend"] }),
+        makeTask({ id: "feat-1.2", title: "B", status: "open", labels: [] }),
+      ],
+    );
+    writePlansDir(tmpDir, { "my-feature": data });
+
+    const result = getReadyTasks(tmpDir, undefined, { labels: [] });
+    expect(result).toHaveLength(2);
+  });
+
+  it("returns empty array when label does not match any task", () => {
+    const data = makeTasksFile(
+      [{ id: "feat-1", title: "Phase 1", created: "2026-03-30" }],
+      [
+        makeTask({ id: "feat-1.1", title: "A", status: "open", labels: ["frontend"] }),
+      ],
+    );
+    writePlansDir(tmpDir, { "my-feature": data });
+
+    const result = getReadyTasks(tmpDir, undefined, { labels: ["no-matches"] });
+    expect(result).toEqual([]);
+  });
+
+  it("phase label (phase:5) works as any other label filter", () => {
+    const data = makeTasksFile(
+      [{ id: "feat-1", title: "Phase 1", created: "2026-03-30" }],
+      [
+        makeTask({ id: "feat-1.1", title: "A", status: "open", labels: ["phase:5"] }),
+        makeTask({ id: "feat-1.2", title: "B", status: "open", labels: ["phase:6"] }),
+      ],
+    );
+    writePlansDir(tmpDir, { "my-feature": data });
+
+    const result = getReadyTasks(tmpDir, undefined, { labels: ["phase:5"] });
+    expect(result).toHaveLength(1);
+    expect(result[0].id).toBe("feat-1.1");
+  });
+
+  it("composes with feature scoping", () => {
+    const dataA = makeTasksFile(
+      [{ id: "alpha-1", title: "Alpha Phase", created: "2026-03-30" }],
+      [makeTask({ id: "alpha-1.1", title: "Alpha Task", status: "open", labels: ["gate:human"] })],
+    );
+    const dataB = makeTasksFile(
+      [{ id: "beta-1", title: "Beta Phase", created: "2026-03-30" }],
+      [makeTask({ id: "beta-1.1", title: "Beta Task", status: "open", labels: ["gate:human"] })],
+    );
+    writePlansDir(tmpDir, { alpha: dataA, beta: dataB });
+
+    const result = getReadyTasks(tmpDir, "alpha", { labels: ["gate:human"] });
+    expect(result).toHaveLength(1);
+    expect(result[0].id).toBe("alpha-1.1");
+  });
+});
+
+// ─── deleteTask ──────────────────────────────────────────────────────
+
+describe("deleteTask", () => {
+  let tmpDir: string;
+
+  beforeEach(() => { tmpDir = makeTmpDir(); setupProject(tmpDir, "FORGE"); });
+  afterEach(() => { rmSync(tmpDir, { recursive: true, force: true }); });
+
+  it("without --confirm returns a DeletePreview with descendants and dependents", async () => {
+    const tasks: Task[] = [
+      { id: "FORGE-1.1", title: "Parent", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: null },
+      { id: "FORGE-1.1.1", title: "Child A", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: null },
+      { id: "FORGE-1.1.2", title: "Child B", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: null },
+      { id: "FORGE-1.2", title: "Dependent", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: ["FORGE-1.1"], comments: [], closeReason: null },
+    ];
+    setupFeature(tmpDir, "auth", { version: 1, epics: [{ id: "FORGE-1", title: "Auth", created: "2026-03-30" }], tasks });
+
+    const preview = await deleteTask("FORGE-1.1", { confirm: false }, tmpDir);
+    expect(preview).toBeDefined();
+    expect(preview!.id).toBe("FORGE-1.1");
+    expect(preview!.title).toBe("Parent");
+    expect(preview!.descendants.sort()).toEqual(["FORGE-1.1.1", "FORGE-1.1.2"]);
+    expect(preview!.dependents).toEqual(["FORGE-1.2"]);
+
+    // file unchanged
+    const data = readJson(join(tmpDir, "plans", "auth", TASKS_FILENAME));
+    expect(data.tasks).toHaveLength(4);
+  });
+
+  it("without --confirm does not modify tasks.json", async () => {
+    const tasks: Task[] = [
+      { id: "FORGE-1.1", title: "A", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: null },
+    ];
+    setupFeature(tmpDir, "auth", { version: 1, epics: [{ id: "FORGE-1", title: "Auth", created: "2026-03-30" }], tasks });
+    const before = readFileSync(join(tmpDir, "plans", "auth", TASKS_FILENAME), "utf-8");
+
+    await deleteTask("FORGE-1.1", { confirm: false }, tmpDir);
+
+    const after = readFileSync(join(tmpDir, "plans", "auth", TASKS_FILENAME), "utf-8");
+    expect(after).toBe(before);
+  });
+
+  it("with --confirm and no descendants removes the task", async () => {
+    const tasks: Task[] = [
+      { id: "FORGE-1.1", title: "A", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: null },
+      { id: "FORGE-1.2", title: "B", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: null },
+    ];
+    setupFeature(tmpDir, "auth", { version: 1, epics: [{ id: "FORGE-1", title: "Auth", created: "2026-03-30" }], tasks });
+
+    const result = await deleteTask("FORGE-1.1", { confirm: true }, tmpDir);
+    expect(result).toBeUndefined();
+
+    const data = readJson(join(tmpDir, "plans", "auth", TASKS_FILENAME));
+    expect(data.tasks).toHaveLength(1);
+    expect(data.tasks[0].id).toBe("FORGE-1.2");
+  });
+
+  it("with --confirm removes the deleted id from other tasks' dependencies[]", async () => {
+    const tasks: Task[] = [
+      { id: "FORGE-1.1", title: "Target", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: null },
+      { id: "FORGE-1.2", title: "Dependent A", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: ["FORGE-1.1"], comments: [], closeReason: null },
+      { id: "FORGE-1.3", title: "Dependent B", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: ["FORGE-1.1", "FORGE-1.2"], comments: [], closeReason: null },
+    ];
+    setupFeature(tmpDir, "auth", { version: 1, epics: [{ id: "FORGE-1", title: "Auth", created: "2026-03-30" }], tasks });
+
+    await deleteTask("FORGE-1.1", { confirm: true }, tmpDir);
+
+    const data = readJson(join(tmpDir, "plans", "auth", TASKS_FILENAME));
+    expect(data.tasks).toHaveLength(2);
+    const byId: Record<string, any> = {};
+    for (const t of data.tasks) byId[t.id] = t;
+    expect(byId["FORGE-1.2"].dependencies).toEqual([]);
+    expect(byId["FORGE-1.3"].dependencies).toEqual(["FORGE-1.2"]);
+  });
+
+  it("with --confirm cleans dangling deps across feature files", async () => {
+    const authTasks: Task[] = [
+      { id: "FORGE-1.1", title: "Target", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: null },
+    ];
+    const pipeTasks: Task[] = [
+      { id: "FORGE-2.1", title: "Cross-file dependent", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: ["FORGE-1.1"], comments: [], closeReason: null },
+    ];
+    setupFeature(tmpDir, "auth", { version: 1, epics: [{ id: "FORGE-1", title: "Auth", created: "2026-03-30" }], tasks: authTasks });
+    setupFeature(tmpDir, "pipeline", { version: 1, epics: [{ id: "FORGE-2", title: "Pipe", created: "2026-03-30" }], tasks: pipeTasks });
+
+    await deleteTask("FORGE-1.1", { confirm: true }, tmpDir);
+
+    const authData = readJson(join(tmpDir, "plans", "auth", TASKS_FILENAME));
+    expect(authData.tasks).toHaveLength(0);
+
+    const pipeData = readJson(join(tmpDir, "plans", "pipeline", TASKS_FILENAME));
+    expect(pipeData.tasks[0].dependencies).toEqual([]);
+  });
+
+  it("with --confirm and descendants throws and does not modify files", async () => {
+    const tasks: Task[] = [
+      { id: "FORGE-1.1", title: "Parent", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: null },
+      { id: "FORGE-1.1.1", title: "Child", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: null },
+    ];
+    setupFeature(tmpDir, "auth", { version: 1, epics: [{ id: "FORGE-1", title: "Auth", created: "2026-03-30" }], tasks });
+    const before = readFileSync(join(tmpDir, "plans", "auth", TASKS_FILENAME), "utf-8");
+
+    expect(deleteTask("FORGE-1.1", { confirm: true }, tmpDir)).rejects.toThrow(/FORGE-1\.1\.1/);
+
+    // Wait a tick for the rejection to settle, then re-read.
+    // The file MUST remain unmodified.
+    await new Promise((r) => setTimeout(r, 10));
+    const after = readFileSync(join(tmpDir, "plans", "auth", TASKS_FILENAME), "utf-8");
+    expect(after).toBe(before);
+  });
+
+  it("throws on unknown id and leaves tasks.json unmodified", async () => {
+    const tasks: Task[] = [
+      { id: "FORGE-1.1", title: "A", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: null },
+    ];
+    setupFeature(tmpDir, "auth", { version: 1, epics: [{ id: "FORGE-1", title: "Auth", created: "2026-03-30" }], tasks });
+    const before = readFileSync(join(tmpDir, "plans", "auth", TASKS_FILENAME), "utf-8");
+
+    expect(deleteTask("FORGE-999.9", { confirm: true }, tmpDir)).rejects.toThrow(/not found/);
+
+    await new Promise((r) => setTimeout(r, 10));
+    const after = readFileSync(join(tmpDir, "plans", "auth", TASKS_FILENAME), "utf-8");
+    expect(after).toBe(before);
+  });
+
+  it("throws on unknown id even without --confirm", async () => {
+    const tasks: Task[] = [
+      { id: "FORGE-1.1", title: "A", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: null },
+    ];
+    setupFeature(tmpDir, "auth", { version: 1, epics: [{ id: "FORGE-1", title: "Auth", created: "2026-03-30" }], tasks });
+
+    expect(deleteTask("FORGE-999.9", { confirm: false }, tmpDir)).rejects.toThrow(/not found/);
+  });
+
+  it("preview descendants use exact id-prefix match (no substring false-positives)", async () => {
+    // FORGE-1.10 must not be considered a descendant of FORGE-1.1
+    const tasks: Task[] = [
+      { id: "FORGE-1.1", title: "A", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: null },
+      { id: "FORGE-1.10", title: "Unrelated sibling", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: null },
+    ];
+    setupFeature(tmpDir, "auth", { version: 1, epics: [{ id: "FORGE-1", title: "Auth", created: "2026-03-30" }], tasks });
+
+    const preview = await deleteTask("FORGE-1.1", { confirm: false }, tmpDir);
+    expect(preview!.descendants).toEqual([]);
   });
 });

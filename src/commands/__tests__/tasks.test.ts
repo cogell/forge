@@ -344,6 +344,48 @@ describe("forge tasks CLI", () => {
     expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("Unknown epic subcommand"));
   });
 
+  // ── epic create --id (FORGE-3.6) ──────────────────────────────
+
+  it("epic create --id uses the explicit id verbatim", async () => {
+    setupFeature(tmp, "auth");
+    await tasks(["auth"]);
+
+    await tasks(["epic", "create", "auth", "--id", "TEST-9", "Pinned epic"]);
+    const data = readJson(join(tmp, "plans", "auth", TASKS_FILENAME));
+    expect(data.epics).toHaveLength(1);
+    expect(data.epics[0].id).toBe("TEST-9");
+    expect(data.epics[0].title).toBe("Pinned epic");
+  });
+
+  it("epic create --id rejects malformed id before writing", async () => {
+    setupFeature(tmp, "auth");
+    await tasks(["auth"]);
+
+    try { await tasks(["epic", "create", "auth", "--id", "BADFORMAT", "X"]); } catch {}
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("invalid epic id BADFORMAT"));
+    // tasks.json remains an empty scaffold (no epics added)
+    const data = readJson(join(tmp, "plans", "auth", TASKS_FILENAME));
+    expect(data.epics).toEqual([]);
+  });
+
+  it("epic create --id rejects a duplicate and names the conflicting feature/title", async () => {
+    setupFeature(tmp, "auth", {
+      version: 1,
+      epics: [{ id: "TEST-9", title: "Original", created: "2026-03-30" }],
+      tasks: [],
+    });
+    setupFeature(tmp, "pipeline");
+    await tasks(["pipeline"]);
+
+    try { await tasks(["epic", "create", "pipeline", "--id", "TEST-9", "Duplicate"]); } catch {}
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringMatching(/TEST-9.*auth.*Original/));
+    // pipeline tasks.json unmodified
+    const pipelineData = readJson(join(tmp, "plans", "pipeline", TASKS_FILENAME));
+    expect(pipelineData.epics).toEqual([]);
+  });
+
   // ── handleList all features (#5) ──────────────────────────────
 
   it("list with no feature aggregates all task files", async () => {
@@ -520,6 +562,101 @@ describe("forge tasks CLI", () => {
 
     expect(exitSpy).toHaveBeenCalledWith(1);
     expect(errorSpy.mock.calls.some((c: string[]) => c[0]?.includes("Invalid priority"))).toBe(true);
+  });
+
+  // ── --blocked-by flag (FORGE-3.3) ───────────────────────────────
+
+  it("create --blocked-by adds a single dependency", async () => {
+    const tasksData: TasksFile = {
+      version: 1,
+      epics: [{ id: "TEST-1", title: "P1", created: "2026-03-30" }],
+      tasks: [
+        { id: "TEST-1.1", title: "Blocker", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: null },
+      ],
+    };
+    setupFeature(tmp, "auth", tasksData);
+
+    await tasks(["create", "auth", "Blocked task", "--parent", "TEST-1", "--blocked-by", "TEST-1.1"]);
+    const data = readJson(join(tmp, "plans", "auth", TASKS_FILENAME));
+    const created = data.tasks.find((t: any) => t.title === "Blocked task");
+    expect(created).toBeDefined();
+    expect(created.dependencies).toEqual(["TEST-1.1"]);
+  });
+
+  it("create --blocked-by is repeatable", async () => {
+    const tasksData: TasksFile = {
+      version: 1,
+      epics: [{ id: "TEST-1", title: "P1", created: "2026-03-30" }],
+      tasks: [
+        { id: "TEST-1.1", title: "A", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: null },
+        { id: "TEST-1.2", title: "B", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: null },
+      ],
+    };
+    setupFeature(tmp, "auth", tasksData);
+
+    await tasks(["create", "auth", "Blocked", "--parent", "TEST-1", "--blocked-by", "TEST-1.1", "--blocked-by", "TEST-1.2"]);
+    const data = readJson(join(tmp, "plans", "auth", TASKS_FILENAME));
+    const created = data.tasks.find((t: any) => t.title === "Blocked");
+    expect(created.dependencies).toEqual(["TEST-1.1", "TEST-1.2"]);
+  });
+
+  it("create --blocked-by UNKNOWN exits non-zero and does not write", async () => {
+    const tasksData: TasksFile = {
+      version: 1,
+      epics: [{ id: "TEST-1", title: "P1", created: "2026-03-30" }],
+      tasks: [],
+    };
+    setupFeature(tmp, "auth", tasksData);
+    const filePath = join(tmp, "plans", "auth", TASKS_FILENAME);
+    const before = readFileSync(filePath, "utf-8");
+
+    try {
+      await tasks(["create", "auth", "Blocked", "--parent", "TEST-1", "--blocked-by", "UNKNOWN-ID"]);
+    } catch {}
+
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    expect(errorSpy.mock.calls.some((c: string[]) => c[0]?.includes("UNKNOWN-ID"))).toBe(true);
+    expect(readFileSync(filePath, "utf-8")).toBe(before);
+  });
+
+  it("create --blocked-by batch error names all unknown ids", async () => {
+    const tasksData: TasksFile = {
+      version: 1,
+      epics: [{ id: "TEST-1", title: "P1", created: "2026-03-30" }],
+      tasks: [],
+    };
+    setupFeature(tmp, "auth", tasksData);
+
+    try {
+      await tasks(["create", "auth", "Blocked", "--parent", "TEST-1", "--blocked-by", "UNK-1", "--blocked-by", "UNK-2"]);
+    } catch {}
+
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    const errMsgs = errorSpy.mock.calls.map((c: string[]) => c[0]).join("\n");
+    expect(errMsgs).toContain("UNK-1");
+    expect(errMsgs).toContain("UNK-2");
+  });
+
+  it("create --blocked-by resolves cross-feature blocker ids", async () => {
+    const authData: TasksFile = {
+      version: 1,
+      epics: [{ id: "TEST-1", title: "P1", created: "2026-03-30" }],
+      tasks: [],
+    };
+    const pipeData: TasksFile = {
+      version: 1,
+      epics: [{ id: "TEST-2", title: "P2", created: "2026-03-30" }],
+      tasks: [
+        { id: "TEST-2.1", title: "Cross-blocker", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: null },
+      ],
+    };
+    setupFeature(tmp, "auth", authData);
+    setupFeature(tmp, "pipeline", pipeData);
+
+    await tasks(["create", "auth", "Cross blocked", "--parent", "TEST-1", "--blocked-by", "TEST-2.1"]);
+    const data = readJson(join(tmp, "plans", "auth", TASKS_FILENAME));
+    const created = data.tasks.find((t: any) => t.title === "Cross blocked");
+    expect(created.dependencies).toEqual(["TEST-2.1"]);
   });
 
   it("update rejects --status closed with helpful message", async () => {
@@ -699,6 +836,61 @@ describe("forge tasks CLI", () => {
     expect(data.tasks[0].acceptance).toEqual(["Works correctly"]);
   });
 
+  it("update --replace with --acceptance replaces existing acceptance array", async () => {
+    const tasksData: TasksFile = {
+      version: 1,
+      epics: [{ id: "TEST-1", title: "P1", created: "2026-03-30" }],
+      tasks: [
+        { id: "TEST-1.1", title: "T", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: ["old-1", "old-2", "old-3"], notes: "", dependencies: [], comments: [], closeReason: null },
+      ],
+    };
+    setupFeature(tmp, "auth", tasksData);
+    await tasks(["update", "TEST-1.1", "--acceptance", "first", "--acceptance", "second", "--replace"]);
+
+    const data = readJson(join(tmp, "plans", "auth", TASKS_FILENAME));
+    expect(data.tasks[0].acceptance).toEqual(["first", "second"]);
+  });
+
+  it("update without --replace preserves append behavior (backward-compatible)", async () => {
+    const tasksData: TasksFile = {
+      version: 1,
+      epics: [{ id: "TEST-1", title: "P1", created: "2026-03-30" }],
+      tasks: [
+        { id: "TEST-1.1", title: "T", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: ["existing"], notes: "", dependencies: [], comments: [], closeReason: null },
+      ],
+    };
+    setupFeature(tmp, "auth", tasksData);
+    await tasks(["update", "TEST-1.1", "--acceptance", "added"]);
+
+    const data = readJson(join(tmp, "plans", "auth", TASKS_FILENAME));
+    expect(data.tasks[0].acceptance).toEqual(["existing", "added"]);
+  });
+
+  it("update --replace without --acceptance is a no-op (exit 0, no write, no error)", async () => {
+    const tasksData: TasksFile = {
+      version: 1,
+      epics: [{ id: "TEST-1", title: "P1", created: "2026-03-30" }],
+      tasks: [
+        { id: "TEST-1.1", title: "T", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: ["keep-1", "keep-2"], notes: "", dependencies: [], comments: [], closeReason: null },
+      ],
+    };
+    setupFeature(tmp, "auth", tasksData);
+    const filePath = join(tmp, "plans", "auth", TASKS_FILENAME);
+    const before = readFileSync(filePath, "utf-8");
+
+    await tasks(["update", "TEST-1.1", "--replace"]);
+
+    // No error, no exit(1)
+    expect(exitSpy).not.toHaveBeenCalled();
+    // File unchanged byte-for-byte
+    expect(readFileSync(filePath, "utf-8")).toBe(before);
+  });
+
+  it("update --help mentions --replace flag", async () => {
+    await tasks(["update", "--help"]);
+    expect(logSpy.mock.calls.some((c: string[]) => c[0]?.includes("--replace"))).toBe(true);
+  });
+
   // ── Improved error messages (#4) ─────────────────────────────
 
   it("show not-found error includes usage hint", async () => {
@@ -747,5 +939,311 @@ describe("forge tasks CLI", () => {
 
     const data = readJson(join(tmp, "plans", "auth", TASKS_FILENAME));
     expect(data.tasks[0].priority).toBe(0);
+  });
+
+  // ── forge tasks delete ──────────────────────────────────────
+
+  it("delete without --confirm prints preview and exits 0 without writing", async () => {
+    const tasksData: TasksFile = {
+      version: 1,
+      epics: [{ id: "TEST-1", title: "P1", created: "2026-03-30" }],
+      tasks: [
+        { id: "TEST-1.1", title: "To delete", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: null },
+      ],
+    };
+    setupFeature(tmp, "auth", tasksData);
+
+    await tasks(["delete", "TEST-1.1"]);
+    // Dry-run is a successful no-op: process.exit must NOT have been called.
+    expect(exitSpy).not.toHaveBeenCalled();
+    const logged = logSpy.mock.calls.map((c: string[]) => c.join(" ")).join("\n");
+    expect(logged).toContain("TEST-1.1");
+    expect(logged).toContain("To delete");
+    expect(logged).toContain("Re-run with --confirm");
+
+    // File must be unchanged
+    const data = readJson(join(tmp, "plans", "auth", TASKS_FILENAME));
+    expect(data.tasks).toHaveLength(1);
+  });
+
+  it("delete --confirm with no descendants removes task atomically", async () => {
+    const tasksData: TasksFile = {
+      version: 1,
+      epics: [{ id: "TEST-1", title: "P1", created: "2026-03-30" }],
+      tasks: [
+        { id: "TEST-1.1", title: "A", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: null },
+        { id: "TEST-1.2", title: "B", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: null },
+      ],
+    };
+    setupFeature(tmp, "auth", tasksData);
+
+    await tasks(["delete", "TEST-1.1", "--confirm"]);
+
+    const data = readJson(join(tmp, "plans", "auth", TASKS_FILENAME));
+    expect(data.tasks).toHaveLength(1);
+    expect(data.tasks[0].id).toBe("TEST-1.2");
+  });
+
+  it("delete --confirm strips the deleted id from other tasks' dependencies", async () => {
+    const tasksData: TasksFile = {
+      version: 1,
+      epics: [{ id: "TEST-1", title: "P1", created: "2026-03-30" }],
+      tasks: [
+        { id: "TEST-1.1", title: "Target", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: null },
+        { id: "TEST-1.2", title: "Dependent", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: ["TEST-1.1"], comments: [], closeReason: null },
+      ],
+    };
+    setupFeature(tmp, "auth", tasksData);
+
+    await tasks(["delete", "TEST-1.1", "--confirm"]);
+
+    const data = readJson(join(tmp, "plans", "auth", TASKS_FILENAME));
+    expect(data.tasks).toHaveLength(1);
+    expect(data.tasks[0].id).toBe("TEST-1.2");
+    expect(data.tasks[0].dependencies).toEqual([]);
+  });
+
+  it("delete --confirm on a task with descendants exits non-zero and leaves file unmodified", async () => {
+    const tasksData: TasksFile = {
+      version: 1,
+      epics: [{ id: "TEST-1", title: "P1", created: "2026-03-30" }],
+      tasks: [
+        { id: "TEST-1.1", title: "Parent", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: null },
+        { id: "TEST-1.1.1", title: "Child", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: null },
+      ],
+    };
+    setupFeature(tmp, "auth", tasksData);
+    const before = readFileSync(join(tmp, "plans", "auth", TASKS_FILENAME), "utf-8");
+
+    try { await tasks(["delete", "TEST-1.1", "--confirm"]); } catch {}
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    const errorMsg = errorSpy.mock.calls.map((c: string[]) => c[0]).join(" ");
+    expect(errorMsg).toContain("TEST-1.1.1");
+
+    const after = readFileSync(join(tmp, "plans", "auth", TASKS_FILENAME), "utf-8");
+    expect(after).toBe(before);
+  });
+
+  it("delete --confirm on unknown id exits non-zero with a clear message", async () => {
+    const tasksData: TasksFile = {
+      version: 1,
+      epics: [{ id: "TEST-1", title: "P1", created: "2026-03-30" }],
+      tasks: [
+        { id: "TEST-1.1", title: "A", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: null },
+      ],
+    };
+    setupFeature(tmp, "auth", tasksData);
+    const before = readFileSync(join(tmp, "plans", "auth", TASKS_FILENAME), "utf-8");
+
+    try { await tasks(["delete", "UNKNOWN-9.9", "--confirm"]); } catch {}
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    const errorMsg = errorSpy.mock.calls.map((c: string[]) => c[0]).join(" ");
+    expect(errorMsg).toMatch(/not found|UNKNOWN-9\.9/);
+
+    const after = readFileSync(join(tmp, "plans", "auth", TASKS_FILENAME), "utf-8");
+    expect(after).toBe(before);
+  });
+
+  // ── ready with --label and --phase filters (FORGE-3.4) ────────
+
+  function readyFixture(): TasksFile {
+    return {
+      version: 1,
+      epics: [{ id: "TEST-1", title: "Phase", created: "2026-03-30" }],
+      tasks: [
+        { id: "TEST-1.1", title: "Gate + phase5", status: "open", priority: 1, labels: ["gate:human", "phase:5"], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: null },
+        { id: "TEST-1.2", title: "Frontend + needs-design", status: "open", priority: 2, labels: ["frontend", "needs-design"], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: null },
+        { id: "TEST-1.3", title: "Frontend only", status: "open", priority: 2, labels: ["frontend"], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: null },
+        { id: "TEST-1.4", title: "Phase5 + needs-design", status: "open", priority: 3, labels: ["phase:5", "needs-design"], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: null },
+        { id: "TEST-1.5", title: "Unlabeled", status: "open", priority: 4, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: null },
+      ],
+    };
+  }
+
+  it("ready with no filter flags returns all ready tasks (backward compat)", async () => {
+    setupFeature(tmp, "auth", readyFixture());
+    await tasks(["ready", "--json"]);
+
+    const output = logSpy.mock.calls[0][0];
+    const parsed = JSON.parse(output);
+    expect(parsed).toHaveLength(5);
+  });
+
+  it("ready --label gate:human returns only tasks with that label", async () => {
+    setupFeature(tmp, "auth", readyFixture());
+    await tasks(["ready", "--label", "gate:human", "--json"]);
+
+    const output = logSpy.mock.calls[0][0];
+    const parsed = JSON.parse(output);
+    expect(parsed).toHaveLength(1);
+    expect(parsed[0].id).toBe("TEST-1.1");
+  });
+
+  it("ready with two --label flags intersects (AND)", async () => {
+    setupFeature(tmp, "auth", readyFixture());
+    await tasks(["ready", "--label", "frontend", "--label", "needs-design", "--json"]);
+
+    const output = logSpy.mock.calls[0][0];
+    const parsed = JSON.parse(output);
+    expect(parsed).toHaveLength(1);
+    expect(parsed[0].id).toBe("TEST-1.2");
+  });
+
+  it("ready --phase 5 is equivalent to --label phase:5", async () => {
+    setupFeature(tmp, "auth", readyFixture());
+    await tasks(["ready", "--phase", "5", "--json"]);
+    const phaseOut = JSON.parse(logSpy.mock.calls[0][0]);
+
+    logSpy.mockClear();
+    await tasks(["ready", "--label", "phase:5", "--json"]);
+    const labelOut = JSON.parse(logSpy.mock.calls[0][0]);
+
+    expect(phaseOut).toEqual(labelOut);
+    const ids = phaseOut.map((t: any) => t.id).sort();
+    expect(ids).toEqual(["TEST-1.1", "TEST-1.4"]);
+  });
+
+  it("ready --phase 5 --label needs-design intersects phase with label", async () => {
+    setupFeature(tmp, "auth", readyFixture());
+    await tasks(["ready", "--phase", "5", "--label", "needs-design", "--json"]);
+
+    const output = logSpy.mock.calls[0][0];
+    const parsed = JSON.parse(output);
+    expect(parsed).toHaveLength(1);
+    expect(parsed[0].id).toBe("TEST-1.4");
+  });
+
+  it("ready --label no-matches returns empty JSON array", async () => {
+    setupFeature(tmp, "auth", readyFixture());
+    await tasks(["ready", "--label", "no-matches", "--json"]);
+
+    const output = logSpy.mock.calls[0][0];
+    const parsed = JSON.parse(output);
+    expect(parsed).toEqual([]);
+  });
+
+  it("ready --label no-matches in non-JSON mode shows empty list", async () => {
+    setupFeature(tmp, "auth", readyFixture());
+    await tasks(["ready", "--label", "no-matches"]);
+
+    const logs = logSpy.mock.calls.map((c: string[]) => c[0]).join("\n");
+    expect(logs).toContain("No ready tasks");
+  });
+
+  // ── show --children / --full recursion (FORGE-3.5) ─────────────
+
+  function childrenFixture(): TasksFile {
+    return {
+      version: 1,
+      epics: [{ id: "TEST-1", title: "Phase 1", created: "2026-03-30" }],
+      tasks: [
+        { id: "TEST-1.1", title: "Parent container", status: "open", priority: 2, labels: [], description: "parent desc", design: "parent design", acceptance: ["parent ac"], notes: "parent notes", dependencies: [], comments: [], closeReason: null },
+        { id: "TEST-1.1.1", title: "Child A", status: "open", priority: 2, labels: [], description: "childA desc", design: "childA design", acceptance: ["childA ac"], notes: "childA notes", dependencies: [], comments: [], closeReason: null },
+        { id: "TEST-1.1.2", title: "Child B", status: "closed", priority: 2, labels: [], description: "childB desc", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: "done" },
+        { id: "TEST-1.1.1.1", title: "Grandchild", status: "open", priority: 2, labels: [], description: "gc desc", design: "gc design", acceptance: [], notes: "gc notes", dependencies: [], comments: [], closeReason: null },
+        { id: "TEST-1.2", title: "Leaf sibling", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: null },
+      ],
+    };
+  }
+
+  it("show --children renders direct children summary (id + title + status)", async () => {
+    setupFeature(tmp, "auth", childrenFixture());
+    await tasks(["show", "TEST-1.1", "--children"]);
+
+    const logs = logSpy.mock.calls.map((c: string[]) => c[0]).join("\n");
+    // Parent still rendered
+    expect(logs).toContain("TEST-1.1");
+    expect(logs).toContain("Parent container");
+    // Direct children shown
+    expect(logs).toContain("TEST-1.1.1");
+    expect(logs).toContain("Child A");
+    expect(logs).toContain("TEST-1.1.2");
+    expect(logs).toContain("Child B");
+    expect(logs).toContain("closed");
+    // Grandchild NOT included in direct children summary
+    expect(logs).not.toContain("TEST-1.1.1.1");
+  });
+
+  it("show --children on a task with no children prints exact '  (no children)' literal", async () => {
+    setupFeature(tmp, "auth", childrenFixture());
+    await tasks(["show", "TEST-1.2", "--children"]);
+
+    const logCalls = logSpy.mock.calls.map((c: string[]) => c[0]);
+    expect(logCalls).toContain("  (no children)");
+  });
+
+  it("show --children --full recurses through all descendants and renders full fields", async () => {
+    setupFeature(tmp, "auth", childrenFixture());
+    await tasks(["show", "TEST-1.1", "--children", "--full"]);
+
+    const logs = logSpy.mock.calls.map((c: string[]) => c[0]).join("\n");
+    // Parent + all descendants present
+    expect(logs).toContain("TEST-1.1");
+    expect(logs).toContain("TEST-1.1.1");
+    expect(logs).toContain("TEST-1.1.2");
+    expect(logs).toContain("TEST-1.1.1.1");
+    // Full fields for descendants (descriptions, design, notes, acceptance)
+    expect(logs).toContain("childA desc");
+    expect(logs).toContain("childA design");
+    expect(logs).toContain("childA notes");
+    expect(logs).toContain("childA ac");
+    expect(logs).toContain("gc desc");
+    expect(logs).toContain("gc design");
+    expect(logs).toContain("gc notes");
+  });
+
+  it("show --full (without --children) preserves existing single-task full behavior", async () => {
+    setupFeature(tmp, "auth", childrenFixture());
+    await tasks(["show", "TEST-1.1", "--full"]);
+
+    const logs = logSpy.mock.calls.map((c: string[]) => c[0]).join("\n");
+    expect(logs).toContain("TEST-1.1");
+    expect(logs).toContain("parent desc");
+    // Children should NOT render without --children
+    expect(logs).not.toContain("Child A");
+    expect(logs).not.toContain("Child B");
+  });
+
+  it("show --json --children --full emits nested children arrays", async () => {
+    setupFeature(tmp, "auth", childrenFixture());
+    await tasks(["show", "TEST-1.1", "--json", "--children", "--full"]);
+
+    const output = logSpy.mock.calls[0][0];
+    const parsed = JSON.parse(output);
+    expect(parsed.task).toBeDefined();
+    expect(parsed.task.id).toBe("TEST-1.1");
+    expect(Array.isArray(parsed.children)).toBe(true);
+    expect(parsed.children).toHaveLength(2);
+    const childAEntry = parsed.children.find((c: any) => c.task.id === "TEST-1.1.1");
+    expect(childAEntry).toBeDefined();
+    expect(Array.isArray(childAEntry.children)).toBe(true);
+    expect(childAEntry.children).toHaveLength(1);
+    expect(childAEntry.children[0].task.id).toBe("TEST-1.1.1.1");
+    // Child B has no children
+    const childBEntry = parsed.children.find((c: any) => c.task.id === "TEST-1.1.2");
+    expect(childBEntry.children).toEqual([]);
+  });
+
+  it("show --json --children (not --full) emits flat children list under parent", async () => {
+    setupFeature(tmp, "auth", childrenFixture());
+    await tasks(["show", "TEST-1.1", "--json", "--children"]);
+
+    const output = logSpy.mock.calls[0][0];
+    const parsed = JSON.parse(output);
+    expect(parsed.task.id).toBe("TEST-1.1");
+    expect(Array.isArray(parsed.children)).toBe(true);
+    expect(parsed.children).toHaveLength(2);
+    // Direct children only — grandchild not nested (no --full)
+    const ids = parsed.children.map((c: any) => c.task.id).sort();
+    expect(ids).toEqual(["TEST-1.1.1", "TEST-1.1.2"]);
+  });
+
+  it("show --children with UNKNOWN-ID exits non-zero", async () => {
+    setupFeature(tmp, "auth", childrenFixture());
+    try {
+      await tasks(["show", "TEST-999", "--children"]);
+    } catch {}
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    expect(errorSpy.mock.calls.some((c: string[]) => c[0]?.includes("not found"))).toBe(true);
   });
 });

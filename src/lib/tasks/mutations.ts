@@ -4,7 +4,7 @@
  */
 
 import { existsSync, mkdirSync } from "fs";
-import { join } from "path";
+import { basename, dirname, join } from "path";
 import { withLock } from "../lock";
 import { resolveRepoRoot } from "../worktree";
 import type { Task, TasksFile, TaskStatus } from "./types";
@@ -29,11 +29,32 @@ export async function writeTasksFile(filePath: string, data: TasksFile): Promise
 }
 
 /**
+ * Derive a human-friendly feature name from a tasks.json file path.
+ * `plans/tasks.json` → "project"; `plans/<feature>/tasks.json` → "<feature>".
+ */
+function featureNameFromFilePath(filePath: string, plansDir: string): string {
+  const parent = dirname(filePath);
+  if (parent === plansDir) return "project";
+  return basename(parent);
+}
+
+/**
  * Create an epic with globally sequential numbering.
  * Uses a project-level lock (plans/.epic-lock) to prevent duplicate IDs
  * when concurrent createEpic calls target different feature files.
+ *
+ * When `opts.explicitId` is provided, the epic is created with that id.
+ * The id shape is validated BEFORE the lock is acquired; duplicate-id
+ * detection runs inside the .epic-lock critical section via an existence
+ * scan over every tasks.json under plans/. On duplicate, throws with a
+ * message naming the conflicting feature and epic title; no write occurs.
  */
-export async function createEpic(feature: string | null, title: string, cwd?: string): Promise<string> {
+export async function createEpic(
+  feature: string | null,
+  title: string,
+  cwd?: string,
+  opts?: { explicitId?: string }
+): Promise<string> {
   const root = resolveRepoRoot(cwd);
   const prefix = readProjectPrefix(root);
 
@@ -42,6 +63,17 @@ export async function createEpic(feature: string | null, title: string, cwd?: st
 
   const featureDir = feature ? join(plansDir, feature) : plansDir;
   const filePath = join(featureDir, TASKS_FILENAME);
+
+  // Pre-lock shape validation for --id: reject malformed ids before
+  // we acquire the cross-feature lock, so a bad input never blocks or
+  // touches on-disk state.
+  const explicitId = opts?.explicitId;
+  if (explicitId !== undefined) {
+    const shape = new RegExp(`^${prefix}-\\d+$`);
+    if (!shape.test(explicitId)) {
+      throw new Error(`invalid epic id ${explicitId}: expected ${prefix}-<number>`);
+    }
+  }
 
   // Lock ordering: .epic-lock THEN per-file lock. All code that
   // acquires both must follow this order to avoid deadlocks.
@@ -56,6 +88,15 @@ export async function createEpic(feature: string | null, title: string, cwd?: st
       const d = readTasksFile(fp);
       if (!d) continue;
       for (const epic of d.epics) {
+        // Duplicate-id existence scan (inside the lock). When an explicit
+        // id was requested, flag the collision before computing maxN so
+        // the caller sees the conflicting feature + title.
+        if (explicitId !== undefined && epic.id === explicitId) {
+          const owner = featureNameFromFilePath(fp, plansDir);
+          throw new Error(
+            `epic id ${explicitId} already exists in feature "${owner}" (title: "${epic.title}")`
+          );
+        }
         const match = epic.id.match(epicPattern);
         if (match) {
           const n = parseInt(match[1], 10);
@@ -64,7 +105,7 @@ export async function createEpic(feature: string | null, title: string, cwd?: st
       }
     }
 
-    const newId = `${prefix}-${maxN + 1}`;
+    const newId = explicitId ?? `${prefix}-${maxN + 1}`;
     const today = new Date().toISOString().split("T")[0];
 
     return withLock(filePath, () => {
@@ -100,6 +141,7 @@ export async function createTask(
     design?: string;
     acceptance?: string[];
     notes?: string;
+    blockedBy?: string[];
   },
   cwd?: string
 ): Promise<string> {
@@ -107,6 +149,24 @@ export async function createTask(
   readProjectPrefix(root);
 
   const filePath = resolveTasksPath(feature, root);
+
+  // Validate blockedBy ids against all task ids across the project BEFORE
+  // acquiring the per-file lock. Batch-report every unknown id so callers
+  // see the full list. No write occurs on failure, so tasks.json is untouched.
+  if (opts.blockedBy && opts.blockedBy.length > 0) {
+    const allIds = new Set<string>();
+    for (const fp of discoverTaskFilesFromRoot(root)) {
+      const d = readTasksFile(fp);
+      if (d) for (const t of d.tasks) allIds.add(t.id);
+    }
+    const unknown = opts.blockedBy.filter((id) => !allIds.has(id));
+    if (unknown.length > 0) {
+      throw new Error(
+        `Unknown blocker task ID(s): ${unknown.join(", ")}. ` +
+          `Each --blocked-by value must reference an existing task.`
+      );
+    }
+  }
 
   return withLock(filePath, () => {
     const data = readTasksFile(filePath);
@@ -157,7 +217,7 @@ export async function createTask(
       design: opts.design ?? "",
       acceptance: opts.acceptance ?? [],
       notes: opts.notes ?? "",
-      dependencies: [],
+      dependencies: opts.blockedBy ? [...opts.blockedBy] : [],
       comments: [],
       closeReason: null,
     });
@@ -330,6 +390,13 @@ export async function updateTask(
   fields: Partial<Pick<Task, "status" | "priority" | "title" | "description" | "design" | "notes">> & {
     addAcceptance?: string[];
     addLabels?: string[];
+    /**
+     * When true AND addAcceptance is a non-empty array, overwrite
+     * task.acceptance with the new array instead of appending.
+     * When addAcceptance is absent or empty, this flag is a no-op for
+     * the acceptance field (existing criteria are preserved).
+     */
+    replaceAcceptance?: boolean;
   },
   cwd?: string
 ): Promise<void> {
@@ -350,8 +417,12 @@ export async function updateTask(
     if (fields.description !== undefined) task.description = fields.description;
     if (fields.design !== undefined) task.design = fields.design;
     if (fields.notes !== undefined) task.notes = fields.notes;
-    if (fields.addAcceptance) {
-      for (const ac of fields.addAcceptance) task.acceptance.push(ac);
+    if (fields.addAcceptance && fields.addAcceptance.length > 0) {
+      if (fields.replaceAcceptance) {
+        task.acceptance = [...fields.addAcceptance];
+      } else {
+        for (const ac of fields.addAcceptance) task.acceptance.push(ac);
+      }
     }
     if (fields.addLabels) {
       for (const lbl of fields.addLabels) {
@@ -377,6 +448,150 @@ export async function addComment(id: string, message: string, cwd?: string): Pro
     data.tasks[taskIndex].comments.push({ message, timestamp: new Date().toISOString() });
     writeTasksFileRaw(filePath, data);
   });
+}
+
+/**
+ * Preview of a pending deleteTask operation.
+ */
+export interface DeletePreview {
+  id: string;
+  title: string;
+  /** IDs of tasks whose id starts with `${id}.` (would block a delete). */
+  descendants: string[];
+  /** IDs of other tasks that list `id` in their dependencies[]. */
+  dependents: string[];
+}
+
+/**
+ * Delete a task (with descendant-scan).
+ *
+ * Without `opts.confirm`: scans all task files and returns a DeletePreview.
+ * No write occurs. Unknown ids throw.
+ *
+ * With `opts.confirm`:
+ *  - If the task has any descendants (tasks whose id starts with `${id}.`),
+ *    throws with a message naming them. No write occurs.
+ *  - Otherwise removes the task from its owner file atomically (under that
+ *    file's lock, with a re-scan of all files for descendants inside the
+ *    lock to narrow TOCTOU) and then sweeps every other task file to strip
+ *    `id` from dangling `dependencies[]`.
+ *
+ * Concurrency caveat: cross-file cleanup is NOT atomic — each file is
+ * locked and written independently. A crash mid-sweep can leave dangling
+ * `dependencies[]` entries in files that weren't reached yet. Similarly,
+ * a concurrent createTask that targets a different feature file can add
+ * a descendant between the owner-file write and a later sweep. Both are
+ * edge cases in a single-user CLI but are not prevented here.
+ *
+ * Returns `DeletePreview` in dry-run mode, `void` after a successful delete.
+ */
+export async function deleteTask(
+  id: string,
+  opts: { confirm: boolean },
+  cwd?: string
+): Promise<DeletePreview | void> {
+  const root = resolveRepoRoot(cwd);
+  const allFiles = discoverTaskFilesFromRoot(root);
+
+  // Locate the task and gather descendants + dependents across every file.
+  let ownerFile: string | null = null;
+  let ownerTask: Task | null = null;
+  const descendants: string[] = [];
+  const dependents: string[] = [];
+
+  for (const fp of allFiles) {
+    const data = readTasksFile(fp);
+    if (!data) continue;
+    for (const t of data.tasks) {
+      if (t.id === id) {
+        ownerFile = fp;
+        ownerTask = t;
+      } else if (t.id.startsWith(id + ".")) {
+        descendants.push(t.id);
+      }
+      if (t.id !== id && t.dependencies.includes(id)) {
+        dependents.push(t.id);
+      }
+    }
+  }
+
+  if (!ownerFile || !ownerTask) {
+    throw new Error(`Task "${id}" not found in any tasks.json file.`);
+  }
+
+  if (!opts.confirm) {
+    return {
+      id,
+      title: ownerTask.title,
+      descendants,
+      dependents,
+    };
+  }
+
+  if (descendants.length > 0) {
+    throw new Error(
+      `Cannot delete ${id}: it has ${descendants.length} descendant(s): ${descendants.join(", ")}. ` +
+        `Delete the descendants first.`
+    );
+  }
+
+  // Remove the task from its owner file under lock. Before mutating, re-scan
+  // every task file for descendants so a concurrent createTask that snuck a
+  // child in between the initial scan and here is still caught (narrowest
+  // TOCTOU window we can give without a project-level lock).
+  await withLock(ownerFile, () => {
+    const lateDescendants: string[] = [];
+    for (const fp of allFiles) {
+      const d = readTasksFile(fp);
+      if (!d) continue;
+      for (const t of d.tasks) {
+        if (t.id !== id && t.id.startsWith(id + ".")) {
+          lateDescendants.push(t.id);
+        }
+      }
+    }
+    if (lateDescendants.length > 0) {
+      throw new Error(
+        `Cannot delete ${id}: it has ${lateDescendants.length} descendant(s): ${lateDescendants.join(", ")}. ` +
+          `Delete the descendants first.`
+      );
+    }
+
+    const data = readTasksFile(ownerFile!);
+    if (!data) throw new Error(`${ownerFile} disappeared during write`);
+    const idx = data.tasks.findIndex((t) => t.id === id);
+    if (idx === -1) throw new Error(`Task "${id}" disappeared from ${ownerFile} during write`);
+    data.tasks.splice(idx, 1);
+    // Also clean dangling deps inside the same file before writing.
+    for (const t of data.tasks) {
+      if (t.dependencies.includes(id)) {
+        t.dependencies = t.dependencies.filter((d) => d !== id);
+      }
+    }
+    writeTasksFileRaw(ownerFile!, data);
+  });
+
+  for (const fp of allFiles) {
+    if (fp === ownerFile) continue;
+    // Skip files that don't reference the id at all.
+    const preview = readTasksFile(fp);
+    if (!preview) continue;
+    const needsCleanup = preview.tasks.some((t) => t.dependencies.includes(id));
+    if (!needsCleanup) continue;
+
+    await withLock(fp, () => {
+      const data = readTasksFile(fp);
+      if (!data) return;
+      let changed = false;
+      for (const t of data.tasks) {
+        if (t.dependencies.includes(id)) {
+          t.dependencies = t.dependencies.filter((d) => d !== id);
+          changed = true;
+        }
+      }
+      if (changed) writeTasksFileRaw(fp, data);
+    });
+  }
 }
 
 /**

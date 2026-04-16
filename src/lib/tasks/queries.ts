@@ -79,6 +79,14 @@ export function queryFeatureTasks(feature: string, cwd?: string): EpicInfo | nul
 }
 
 /**
+ * Options for filtering ready tasks.
+ */
+export interface GetReadyTasksOptions {
+  /** Require each listed label to be present on the task (AND semantics). */
+  labels?: string[];
+}
+
+/**
  * Get ready (unblocked) leaf tasks.
  *
  * A task is "ready" when:
@@ -89,8 +97,15 @@ export function queryFeatureTasks(feature: string, cwd?: string): EpicInfo | nul
  * When `feature` is provided, only tasks from that feature's tasks.json
  * are returned, but ALL task files are loaded to resolve cross-file
  * dependency statuses.
+ *
+ * When `opts.labels` is provided and non-empty, the result is further
+ * filtered to tasks whose `labels[]` contains ALL of the listed labels.
  */
-export function getReadyTasks(cwd?: string, feature?: string): ReadyTask[] {
+export function getReadyTasks(
+  cwd?: string,
+  feature?: string,
+  opts?: GetReadyTasksOptions,
+): ReadyTask[] {
   const root = resolveRepoRoot(cwd);
 
   const allFiles = discoverTaskFilesFromRoot(root);
@@ -137,6 +152,8 @@ export function getReadyTasks(cwd?: string, feature?: string): ReadyTask[] {
 
   const ready: ReadyTask[] = [];
 
+  const requiredLabels = opts?.labels ?? [];
+
   for (const task of candidateTasks) {
     if (containerSet.has(task.id)) continue;
     if (task.status !== "open") continue;
@@ -151,6 +168,17 @@ export function getReadyTasks(cwd?: string, feature?: string): ReadyTask[] {
     }
     if (!allDepsReady) continue;
 
+    if (requiredLabels.length > 0) {
+      let hasAllLabels = true;
+      for (const label of requiredLabels) {
+        if (!task.labels.includes(label)) {
+          hasAllLabels = false;
+          break;
+        }
+      }
+      if (!hasAllLabels) continue;
+    }
+
     ready.push({
       id: task.id,
       title: task.title,
@@ -163,4 +191,48 @@ export function getReadyTasks(cwd?: string, feature?: string): ReadyTask[] {
   ready.sort((a, b) => a.priority - b.priority);
 
   return ready;
+}
+
+/**
+ * Get descendant tasks of a parent, by ID-prefix walk.
+ *
+ * Direction: parent DOWN (inverse of the container-detection logic in
+ * getReadyTasks, which walks leaves UP). We iterate all tasks across all
+ * feature files and pick those whose id starts with `${parentId}.`.
+ *
+ * - scope 'direct': only tasks exactly one dot-level below the parent.
+ *   e.g., parentId='FORGE-3' matches 'FORGE-3.1' but NOT 'FORGE-3.1.1'.
+ * - scope 'all': every descendant at any depth.
+ *
+ * Result is sorted by id ascending for deterministic output.
+ */
+export function getDescendants(
+  parentId: string,
+  scope: "direct" | "all",
+  cwd?: string,
+): Task[] {
+  const root = resolveRepoRoot(cwd);
+  const allFiles = discoverTaskFilesFromRoot(root);
+  const allTasks: Task[] = [];
+  for (const filePath of allFiles) {
+    const file = readTasksFile(filePath);
+    if (file) allTasks.push(...file.tasks);
+  }
+
+  const prefix = `${parentId}.`;
+  const matches: Task[] = [];
+
+  for (const task of allTasks) {
+    if (!task.id.startsWith(prefix)) continue;
+    if (scope === "direct") {
+      // Suffix after parent prefix must have no internal dots (i.e. is the
+      // direct child segment, not a deeper descendant).
+      const suffix = task.id.slice(prefix.length);
+      if (suffix.includes(".")) continue;
+    }
+    matches.push(task);
+  }
+
+  matches.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  return matches;
 }
