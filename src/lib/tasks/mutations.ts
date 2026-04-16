@@ -390,6 +390,13 @@ export async function updateTask(
   fields: Partial<Pick<Task, "status" | "priority" | "title" | "description" | "design" | "notes">> & {
     addAcceptance?: string[];
     addLabels?: string[];
+    /**
+     * When true AND addAcceptance is a non-empty array, overwrite
+     * task.acceptance with the new array instead of appending.
+     * When addAcceptance is absent or empty, this flag is a no-op for
+     * the acceptance field (existing criteria are preserved).
+     */
+    replaceAcceptance?: boolean;
   },
   cwd?: string
 ): Promise<void> {
@@ -410,8 +417,12 @@ export async function updateTask(
     if (fields.description !== undefined) task.description = fields.description;
     if (fields.design !== undefined) task.design = fields.design;
     if (fields.notes !== undefined) task.notes = fields.notes;
-    if (fields.addAcceptance) {
-      for (const ac of fields.addAcceptance) task.acceptance.push(ac);
+    if (fields.addAcceptance && fields.addAcceptance.length > 0) {
+      if (fields.replaceAcceptance) {
+        task.acceptance = [...fields.addAcceptance];
+      } else {
+        for (const ac of fields.addAcceptance) task.acceptance.push(ac);
+      }
     }
     if (fields.addLabels) {
       for (const lbl of fields.addLabels) {

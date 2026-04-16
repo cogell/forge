@@ -1428,6 +1428,37 @@ describe("updateTask", () => {
     expect(task.priority).toBe(1);
     expect(task.description).toBe("new");
   });
+
+  it("replaceAcceptance overwrites existing acceptance array", async () => {
+    const tasks: Task[] = [
+      { id: "FORGE-1.1", title: "T", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: ["old-1", "old-2", "old-3"], notes: "", dependencies: [], comments: [], closeReason: null },
+    ];
+    setupFeature(tmpDir, "auth", { version: 1, epics: [{ id: "FORGE-1", title: "Auth", created: "2026-03-30" }], tasks });
+    await updateTask("FORGE-1.1", { addAcceptance: ["first", "second"], replaceAcceptance: true }, tmpDir);
+    const task = readJson(join(tmpDir, "plans", "auth", TASKS_FILENAME)).tasks[0];
+    expect(task.acceptance).toEqual(["first", "second"]);
+  });
+
+  it("replaceAcceptance without addAcceptance is a no-op (preserves existing)", async () => {
+    const tasks: Task[] = [
+      { id: "FORGE-1.1", title: "T", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: ["keep-1", "keep-2"], notes: "", dependencies: [], comments: [], closeReason: null },
+    ];
+    setupFeature(tmpDir, "auth", { version: 1, epics: [{ id: "FORGE-1", title: "Auth", created: "2026-03-30" }], tasks });
+    await updateTask("FORGE-1.1", { replaceAcceptance: true, title: "New title" }, tmpDir);
+    const task = readJson(join(tmpDir, "plans", "auth", TASKS_FILENAME)).tasks[0];
+    expect(task.acceptance).toEqual(["keep-1", "keep-2"]);
+    expect(task.title).toBe("New title");
+  });
+
+  it("without replaceAcceptance, addAcceptance appends (backward-compatible)", async () => {
+    const tasks: Task[] = [
+      { id: "FORGE-1.1", title: "T", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: ["existing"], notes: "", dependencies: [], comments: [], closeReason: null },
+    ];
+    setupFeature(tmpDir, "auth", { version: 1, epics: [{ id: "FORGE-1", title: "Auth", created: "2026-03-30" }], tasks });
+    await updateTask("FORGE-1.1", { addAcceptance: ["added"] }, tmpDir);
+    const task = readJson(join(tmpDir, "plans", "auth", TASKS_FILENAME)).tasks[0];
+    expect(task.acceptance).toEqual(["existing", "added"]);
+  });
 });
 
 // ─── addComment ─────────────────────────────────────────────────────
