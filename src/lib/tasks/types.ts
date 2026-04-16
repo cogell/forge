@@ -8,6 +8,10 @@ export const SCHEMA_VERSION = 1;
 export const TASKS_FILENAME = "tasks.json";
 export const MAX_NESTING_DEPTH = 3;
 
+export const GATE_LABEL_HUMAN = "gate:human";
+export const PHASE_LABEL_PREFIX = "phase:";
+export const COMMIT_PLAN_TEMPLATE = "chore(<feature>): add Phase <N> plan + tasks";
+
 // ─── Types ────────────────────────────────────────────────────────────
 
 export type TaskStatus = "open" | "in_progress" | "closed";

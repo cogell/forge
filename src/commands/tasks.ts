@@ -34,7 +34,7 @@ import {
 
 const RESERVED = [
   "ready", "list", "show", "create", "close", "update",
-  "comment", "label", "dep", "validate", "epic",
+  "comment", "label", "dep", "validate", "epic", "delete",
 ];
 
 const VALID_STATUSES: TaskStatus[] = ["open", "in_progress", "closed"];
@@ -44,11 +44,13 @@ const VALUE_FLAGS = new Set([
   "--parent", "--priority", "-p", "--acceptance", "-a", "--label", "-l",
   "-d", "--description", "--design", "--notes",
   "--status", "--title", "--reason",
+  "--blocked-by", "--phase", "--id",
 ]);
 
 /** Boolean flags that don't consume a value. */
 const BOOLEAN_FLAGS = new Set([
   "--json", "--project", "--force", "--help", "-h",
+  "--confirm", "--children", "--full",
 ]);
 
 const TASKS_HELP = `
