@@ -4,10 +4,11 @@
  * Pure-function module; no I/O beyond loading the round-trip fixture.
  */
 
-import { describe, expect, it } from "bun:test";
-import { readFileSync } from "fs";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { mkdtempSync, readFileSync, readdirSync, rmSync } from "fs";
+import { tmpdir } from "os";
 import { join } from "path";
-import { renderBuffer, parseBuffer, hashTask } from "../tasks";
+import { assertInteractive, renderBuffer, parseBuffer, hashTask, runEditor } from "../tasks";
 import type { Task } from "../tasks";
 
 const FIXTURE_PATH = join(__dirname, "fixtures", "tasks-roundtrip.json");
@@ -442,3 +443,204 @@ describe("re-exports", () => {
     expect(typeof mod.hashTask).toBe("function");
   });
 });
+
+// ─── runEditor subprocess helper ──────────────────────────────────────
+
+/**
+ * A deterministic editor mock that appends 'X' to the buffer contents.
+ * Multi-token string — exercises the shell-splitting path.
+ */
+const APPEND_X = `${process.execPath} -e "const f=require('fs');const p=process.argv[1];f.writeFileSync(p,f.readFileSync(p,'utf8')+'X')"`;
+
+/**
+ * Mock that exits non-zero so we can assert on the error path.
+ */
+const EXIT_1 = `${process.execPath} -e "process.exit(1)"`;
+
+/**
+ * Mock that overwrites the buffer with a known literal (single-token entrypoint).
+ */
+const OVERWRITE_MARK = `${process.execPath} -e "require('fs').writeFileSync(process.argv[1],'MARK')"`;
+
+describe("runEditor", () => {
+  let testTmp: string;
+
+  // Preserve env vars and isTTY state so tests can't bleed into each other.
+  let savedVisual: string | undefined;
+  let savedEditor: string | undefined;
+  let savedCI: string | undefined;
+  let savedIsTTY: boolean | undefined;
+
+  beforeEach(() => {
+    testTmp = mkdtempSync(join(tmpdir(), "forge-edit-test-"));
+    savedVisual = process.env.VISUAL;
+    savedEditor = process.env.EDITOR;
+    savedCI = process.env.CI;
+    savedIsTTY = process.stdout.isTTY;
+    delete process.env.VISUAL;
+    delete process.env.EDITOR;
+    delete process.env.CI;
+  });
+
+  afterEach(() => {
+    try {
+      rmSync(testTmp, { recursive: true, force: true });
+    } catch {
+      /* ignore */
+    }
+    if (savedVisual === undefined) delete process.env.VISUAL;
+    else process.env.VISUAL = savedVisual;
+    if (savedEditor === undefined) delete process.env.EDITOR;
+    else process.env.EDITOR = savedEditor;
+    if (savedCI === undefined) delete process.env.CI;
+    else process.env.CI = savedCI;
+    process.stdout.isTTY = savedIsTTY as boolean;
+  });
+
+  it("returns initial content + 'X' with the appendX override", () => {
+    const out = runEditor("hello", { editorOverride: APPEND_X, tmpdir: testTmp });
+    expect(out).toBe("helloX");
+  });
+
+  it("multi-arg editor override works (multi-token string)", () => {
+    // APPEND_X is a multi-token string: path + -e + JS source. Must shell-split.
+    expect(APPEND_X.split(" ").length).toBeGreaterThan(1);
+    const out = runEditor("abc", { editorOverride: APPEND_X, tmpdir: testTmp });
+    expect(out).toBe("abcX");
+  });
+
+  it("throws when the editor exits non-zero; error message names editor and exit code", () => {
+    expect(() =>
+      runEditor("seed", { editorOverride: EXIT_1, tmpdir: testTmp })
+    ).toThrow(/exit|code|1/i);
+
+    let captured: Error | undefined;
+    try {
+      runEditor("seed", { editorOverride: EXIT_1, tmpdir: testTmp });
+    } catch (err) {
+      captured = err as Error;
+    }
+    expect(captured).toBeDefined();
+    expect(captured!.message).toContain(EXIT_1);
+    expect(captured!.message).toMatch(/1/);
+  });
+
+  it("cleans up the temp dir after a successful run", () => {
+    const before = new Set(readdirSync(testTmp));
+    runEditor("data", { editorOverride: APPEND_X, tmpdir: testTmp });
+    const after = new Set(readdirSync(testTmp));
+    // Every entry after should have existed before — no leftover forge-edit-* dir.
+    for (const name of after) {
+      expect(before.has(name)).toBe(true);
+    }
+  });
+
+  it("cleans up the temp dir after a failing run", () => {
+    const before = new Set(readdirSync(testTmp));
+    try {
+      runEditor("data", { editorOverride: EXIT_1, tmpdir: testTmp });
+    } catch {
+      /* expected */
+    }
+    const after = new Set(readdirSync(testTmp));
+    for (const name of after) {
+      expect(before.has(name)).toBe(true);
+    }
+  });
+
+  it("writes initial content to the temp file before invoking the editor", () => {
+    // OVERWRITE_MARK replaces contents; if runEditor didn't write initial first,
+    // the editor still gets the temp file and produces 'MARK' — we can't see
+    // initial here. Assert via APPEND_X instead: initial must be present for
+    // 'initial + X' to come back.
+    const out = runEditor("seed-xyz", { editorOverride: APPEND_X, tmpdir: testTmp });
+    expect(out).toBe("seed-xyzX");
+  });
+
+  it("returns post-edit contents verbatim (overwrite case)", () => {
+    const out = runEditor("anything", { editorOverride: OVERWRITE_MARK, tmpdir: testTmp });
+    expect(out).toBe("MARK");
+  });
+
+  it("uses editorOverride over $VISUAL", () => {
+    process.env.VISUAL = EXIT_1; // would fail if picked up
+    const out = runEditor("v", { editorOverride: APPEND_X, tmpdir: testTmp });
+    expect(out).toBe("vX");
+  });
+
+  it("uses $VISUAL over $EDITOR", () => {
+    process.env.VISUAL = APPEND_X;
+    process.env.EDITOR = EXIT_1; // would fail if picked up
+    const out = runEditor("e", { tmpdir: testTmp });
+    expect(out).toBe("eX");
+  });
+
+  it("uses $EDITOR over the 'vi' fallback", () => {
+    // If the fallback were used, 'vi' would either fail (no TTY in tests) or
+    // time out. APPEND_X succeeds — that's how we know $EDITOR was chosen.
+    process.env.EDITOR = APPEND_X;
+    const out = runEditor("d", { tmpdir: testTmp });
+    expect(out).toBe("dX");
+  });
+
+  it("uses a .md suffix for the temp file", () => {
+    // Spy on the filename by using a custom editor that records the path.
+    const CAPTURE = `${process.execPath} -e "require('fs').writeFileSync(process.argv[1], process.argv[1])"`;
+    const out = runEditor("", { editorOverride: CAPTURE, tmpdir: testTmp });
+    expect(out.endsWith(".md")).toBe(true);
+  });
+});
+
+// ─── assertInteractive ────────────────────────────────────────────────
+
+describe("assertInteractive", () => {
+  let savedCI: string | undefined;
+  let savedIsTTY: boolean | undefined;
+
+  beforeEach(() => {
+    savedCI = process.env.CI;
+    savedIsTTY = process.stdout.isTTY;
+  });
+
+  afterEach(() => {
+    if (savedCI === undefined) delete process.env.CI;
+    else process.env.CI = savedCI;
+    process.stdout.isTTY = savedIsTTY as boolean;
+  });
+
+  it("throws when process.stdout.isTTY is false", () => {
+    delete process.env.CI;
+    process.stdout.isTTY = false;
+    expect(() => assertInteractive()).toThrow(
+      /forge tasks edit requires an interactive terminal/
+    );
+  });
+
+  it("throws when process.env.CI === 'true'", () => {
+    process.stdout.isTTY = true;
+    process.env.CI = "true";
+    expect(() => assertInteractive()).toThrow(
+      /forge tasks edit requires an interactive terminal/
+    );
+  });
+
+  it("returns void (does not throw) when isTTY is truthy and CI is unset", () => {
+    process.stdout.isTTY = true;
+    delete process.env.CI;
+    expect(() => assertInteractive()).not.toThrow();
+    expect(assertInteractive()).toBeUndefined();
+  });
+
+  it("error message contains the required substring", () => {
+    process.stdout.isTTY = false;
+    delete process.env.CI;
+    let msg = "";
+    try {
+      assertInteractive();
+    } catch (err) {
+      msg = (err as Error).message;
+    }
+    expect(msg).toContain("forge tasks edit requires an interactive terminal");
+  });
+});
+

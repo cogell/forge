@@ -28,8 +28,12 @@
  *   ...
  */
 
+import { spawnSync } from "child_process";
 import { createHash } from "crypto";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import matter from "gray-matter";
+import { tmpdir } from "os";
+import { join } from "path";
 import type { Task } from "./types";
 
 // ─── Public types ─────────────────────────────────────────────────────
@@ -368,4 +372,89 @@ function stableStringify(value: unknown): string {
     entries.map(([k, v]) => JSON.stringify(k) + ":" + stableStringify(v)).join(",") +
     "}"
   );
+}
+
+// ─── Subprocess helpers (editor spawn + TTY/CI guard) ─────────────────
+
+export interface RunEditorOptions {
+  /** Explicit editor command (overrides $VISUAL/$EDITOR/'vi'). May be multi-token. */
+  editorOverride?: string;
+  /** Parent directory for the temp workspace. Defaults to `os.tmpdir()`. */
+  tmpdir?: string;
+}
+
+/**
+ * Spawn the user's editor against a temp file seeded with `initialContent`,
+ * wait for it to exit, and return the post-edit file contents.
+ *
+ * Editor resolution precedence:
+ *   opts.editorOverride → $VISUAL → $EDITOR → 'vi'
+ *
+ * We invoke through `sh -c` so multi-token editor commands like
+ * `code --wait` / `subl -w` split correctly — matches git's GIT_EDITOR
+ * behavior. The temp file path is passed as a positional argument (`$1`),
+ * so it is never interpolated into the shell string itself.
+ *
+ * Cleanup is best-effort: we rm the tempdir on both success and failure
+ * paths. Cleanup errors are swallowed so they don't mask the real result.
+ *
+ * Throws when the editor exits non-zero; the error message includes the
+ * editor command and exit code.
+ */
+export function runEditor(initialContent: string, opts?: RunEditorOptions): string {
+  const editor =
+    opts?.editorOverride ?? process.env.VISUAL ?? process.env.EDITOR ?? "vi";
+
+  // mkdtempSync gives us a unique directory with no filename-race concerns;
+  // we pick a fixed filename inside it so the tmp file always ends in `.md`
+  // (lets editors pick up markdown syntax highlighting).
+  const parent = opts?.tmpdir ?? tmpdir();
+  const dir = mkdtempSync(join(parent, "forge-edit-"));
+  const tmpFilePath = join(dir, "buffer.md");
+
+  try {
+    writeFileSync(tmpFilePath, initialContent, "utf8");
+
+    // Shell invocation handles multi-token editor strings. The path is
+    // passed as $1 (positional), so it's never interpolated into the
+    // shell template — safe even if the path contained special chars.
+    const result = spawnSync("sh", ["-c", `${editor} "$1"`, "sh", tmpFilePath], {
+      stdio: "inherit",
+    });
+
+    if (result.error) {
+      throw new Error(
+        `failed to spawn editor (${editor}): ${result.error.message}`
+      );
+    }
+    if (result.status !== 0) {
+      throw new Error(
+        `editor (${editor}) exited with non-zero code ${result.status}`
+      );
+    }
+
+    return readFileSync(tmpFilePath, "utf8");
+  } finally {
+    // Best-effort cleanup on both the happy and error paths.
+    try {
+      rmSync(dir, { recursive: true, force: true });
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
+/**
+ * Guard for commands that require an interactive terminal (e.g. `forge
+ * tasks edit`). Throws with a stable, user-facing message when invoked
+ * from CI or a piped context.
+ *
+ * Called before any buffer rendering so callers fail fast.
+ */
+export function assertInteractive(): void {
+  if (!process.stdout.isTTY || process.env.CI === "true") {
+    throw new Error(
+      "forge tasks edit requires an interactive terminal; CI/non-TTY environments are not supported"
+    );
+  }
 }
