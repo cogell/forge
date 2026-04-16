@@ -1064,6 +1064,89 @@ describe("createEpic", () => {
     const data = readJson(join(tmpDir, "plans", "auth", TASKS_FILENAME));
     expect(data.epics).toHaveLength(2);
   });
+
+  // ── explicitId option (FORGE-3.6) ─────────────────────────────
+
+  it("creates epic with explicit id when --id matches prefix shape", async () => {
+    setupFeature(tmpDir, "auth");
+    const id = await createEpic("auth", "Pinned", tmpDir, { explicitId: "FORGE-9" });
+    expect(id).toBe("FORGE-9");
+    const data = readJson(join(tmpDir, "plans", "auth", TASKS_FILENAME));
+    expect(data.epics).toHaveLength(1);
+    expect(data.epics[0].id).toBe("FORGE-9");
+    expect(data.epics[0].title).toBe("Pinned");
+  });
+
+  it("rejects malformed explicit id before acquiring the lock", async () => {
+    setupFeature(tmpDir, "auth");
+    await expect(createEpic("auth", "Bad", tmpDir, { explicitId: "BADFORMAT" })).rejects.toThrow(
+      /invalid epic id BADFORMAT: expected FORGE-<number>/
+    );
+    // Lock must not have been acquired — no .epic-lock file left behind as a side effect
+    // and no partial write occurred. tasks.json is still empty.
+    const filePath = join(tmpDir, "plans", "auth", TASKS_FILENAME);
+    expect(existsSync(filePath)).toBe(false);
+  });
+
+  it("rejects explicit id with wrong prefix", async () => {
+    setupFeature(tmpDir, "auth");
+    await expect(createEpic("auth", "X", tmpDir, { explicitId: "OTHER-1" })).rejects.toThrow(
+      /invalid epic id OTHER-1: expected FORGE-<number>/
+    );
+  });
+
+  it("rejects explicit id with non-numeric suffix", async () => {
+    setupFeature(tmpDir, "auth");
+    await expect(createEpic("auth", "X", tmpDir, { explicitId: "FORGE-abc" })).rejects.toThrow(
+      /invalid epic id FORGE-abc: expected FORGE-<number>/
+    );
+  });
+
+  it("rejects explicit id that collides with an existing epic and names the conflicting feature+title", async () => {
+    setupFeature(tmpDir, "auth", {
+      version: 1,
+      epics: [{ id: "FORGE-9", title: "Original", created: "2026-03-30" }],
+      tasks: [],
+    });
+    setupFeature(tmpDir, "pipeline");
+    await expect(
+      createEpic("pipeline", "Duplicate", tmpDir, { explicitId: "FORGE-9" })
+    ).rejects.toThrow(/FORGE-9.*auth.*Original/);
+    // The pipeline tasks.json must remain unchanged (empty file absent).
+    expect(existsSync(join(tmpDir, "plans", "pipeline", TASKS_FILENAME))).toBe(false);
+    // And the auth file retains its original epic untouched.
+    const authData = readJson(join(tmpDir, "plans", "auth", TASKS_FILENAME));
+    expect(authData.epics).toHaveLength(1);
+    expect(authData.epics[0].title).toBe("Original");
+  });
+
+  it("detects collision against a project-level epic and names 'project' as the owning feature", async () => {
+    // Put an epic in the root plans/tasks.json (project-level)
+    mkdirSync(join(tmpDir, "plans"), { recursive: true });
+    writeFileSync(
+      join(tmpDir, "plans", TASKS_FILENAME),
+      JSON.stringify(
+        { version: 1, epics: [{ id: "FORGE-5", title: "Root epic", created: "2026-03-30" }], tasks: [] },
+        null,
+        2
+      ) + "\n"
+    );
+    setupFeature(tmpDir, "auth");
+    await expect(
+      createEpic("auth", "Dup", tmpDir, { explicitId: "FORGE-5" })
+    ).rejects.toThrow(/FORGE-5.*project.*Root epic/);
+  });
+
+  it("without --id, auto-increment behaviour is unchanged (ignores explicit holes)", async () => {
+    setupFeature(tmpDir, "auth", {
+      version: 1,
+      epics: [{ id: "FORGE-9", title: "Pinned", created: "2026-03-30" }],
+      tasks: [],
+    });
+    // maxN = 9, so next auto-increment = 10
+    const id = await createEpic("auth", "Next", tmpDir);
+    expect(id).toBe("FORGE-10");
+  });
 });
 
 describe("createTask", () => {
