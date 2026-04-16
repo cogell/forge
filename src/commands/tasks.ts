@@ -1065,15 +1065,69 @@ async function handleDelete(
   }
 }
 
-// ── Edit handler (FORGE-4.3) ────────────────────────────
+// ── Edit handler (FORGE-4.3 / 4.4) ──────────────────────
+
+/** Sentinel markers for the error block prepended on retry. */
+const ERROR_BLOCK_START = "# forge:error-block-start";
+const ERROR_BLOCK_END = "# forge:error-block-end";
+const MAX_EDIT_RETRIES = 5;
+
+/**
+ * Build an error block prefix from a failure message, per FORGE-4.4 spec.
+ * The block is delimited by sentinel markers so strip-on-retry is
+ * unambiguous (any other leading `#` lines — e.g. renderBuffer's reference
+ * header — must survive untouched).
+ */
+function buildErrorBlock(message: string): string {
+  return [
+    ERROR_BLOCK_START,
+    "# edit failed — fix the issues below and save again, or quit to abort:",
+    "#",
+    `#   - ${message}`,
+    "#",
+    ERROR_BLOCK_END,
+    "",
+    "",
+  ].join("\n");
+}
+
+/**
+ * Strip the first contiguous error block (sentinel-delimited, plus the
+ * trailing blank line) from a buffer. Leaves all other `#` comments
+ * intact — critical for preserving renderBuffer's reference header
+ * across retries.
+ */
+function stripErrorBlock(buffer: string): string {
+  const lines = buffer.split("\n");
+  const startIdx = lines.indexOf(ERROR_BLOCK_START);
+  if (startIdx === -1) return buffer;
+  let endIdx = -1;
+  for (let i = startIdx + 1; i < lines.length; i++) {
+    if (lines[i] === ERROR_BLOCK_END) {
+      endIdx = i;
+      break;
+    }
+  }
+  if (endIdx === -1) return buffer; // malformed — leave alone
+  // Also consume ONE trailing blank line if present.
+  let cutEnd = endIdx + 1;
+  if (cutEnd < lines.length && lines[cutEnd] === "") cutEnd++;
+  lines.splice(startIdx, cutEnd - startIdx);
+  return lines.join("\n");
+}
 
 /**
  * `forge tasks edit <task-id>` — render the task as a markdown buffer, spawn
- * the user's editor, parse the result, and apply the edits via updateTask.
+ * the user's editor, parse the result, apply dep-validation and an
+ * optimistic-lock check, then write via updateTask.
  *
- * This handler is the "happy path" implementation. Robustness features
- * (crontab-style re-open, optimistic lock, active --force) extend this
- * handler in FORGE-4.4; the hooks are marked inline.
+ * FORGE-4.4 extends 4.3's happy path with:
+ *   - crontab-style re-open loop on parse/dep-validation errors
+ *   - optimistic lock on the reloaded task (skipped with --force)
+ *   - batch dependency-existence validation
+ *   - distinct retry-abort UX message
+ *
+ * --dry-run is single-shot: no retry loop, no lock check.
  */
 async function handleEdit(args: string[], positional: string[], cwd: string): Promise<void> {
   // 1. TTY/CI guard — fail fast before any editor spawn.
@@ -1083,12 +1137,9 @@ async function handleEdit(args: string[], positional: string[], cwd: string): Pr
     fail((err as Error).message);
   }
 
-  // 2. Parse flags. --dry-run / --force are boolean; --editor takes a value.
+  // 2. Parse flags.
   const dryRun = args.includes("--dry-run");
-  // --force is parsed now so 4.4 just reads the already-parsed value.
-  // Reference it via `void` so it doesn't trip unused-binding lint.
   const force = args.includes("--force");
-  void force;
 
   let editorOverride: string | undefined;
   const editorIdx = args.indexOf("--editor");
@@ -1127,60 +1178,157 @@ async function handleEdit(args: string[], positional: string[], cwd: string): Pr
 
   const task = found.task;
 
-  // 4. HOOK for FORGE-4.4: pre-edit hash for optimistic lock detection.
+  // 4. Pre-edit hash for optimistic lock detection.
   const openHash = hashTask(task);
-  void openHash;
 
-  // 5. Render the editable buffer.
+  // 5. Render the initial editable buffer.
   const initialBuffer = renderBuffer(task);
 
-  // 6. Spawn the editor.
-  let editedContent: string;
-  try {
-    editedContent = runEditor(
-      initialBuffer,
-      editorOverride !== undefined ? { editorOverride } : undefined,
+  // ── Retry loop ──────────────────────────────────────
+  //
+  // - `bufferToOpen` is the content handed to the editor this iteration.
+  //   On retry it's (previous user edits) with any prior error block
+  //   stripped, and a new error block prepended.
+  // - `strippedBaseline` is `bufferToOpen` with the error block immediately
+  //   re-stripped — i.e. what the user would see as "their" content. We
+  //   compare against this to detect the "saved unchanged after seeing an
+  //   error" case (the retry-abort UX).
+  let bufferToOpen = initialBuffer;
+  let strippedBaseline = initialBuffer;
+  let isRetry = false;
+  let parsed: ReturnType<typeof parseBuffer>["task"] | null = null;
+
+  for (let attempt = 0; attempt < MAX_EDIT_RETRIES; attempt++) {
+    let editedContent: string;
+    try {
+      editedContent = runEditor(
+        bufferToOpen,
+        editorOverride !== undefined ? { editorOverride } : undefined,
+      );
+    } catch (err) {
+      fail((err as Error).message);
+    }
+
+    // Empty buffer: exit 0, no write. Works on first shot AND on retry.
+    if (editedContent.trim() === "") {
+      console.error("edit aborted (empty buffer)");
+      return;
+    }
+
+    // Strip any stale error block the user didn't clean up. This is the
+    // buffer we'll compare for unchanged / feed to the parser.
+    const userContent = stripErrorBlock(editedContent);
+
+    // Unchanged (byte-equal to baseline) → abort with appropriate message.
+    if (userContent === strippedBaseline) {
+      if (isRetry) {
+        console.error(
+          "edit aborted (no changes after error — did you mean to fix the issue?)",
+        );
+      } else {
+        console.error("edit aborted (no changes)");
+      }
+      return;
+    }
+
+    // Parse.
+    let parseResult;
+    try {
+      parseResult = parseBuffer(userContent);
+    } catch (err) {
+      if (dryRun) {
+        // --dry-run is single-shot: surface the error and exit 1.
+        fail((err as Error).message);
+      }
+      // Crontab-style: feed the error back in and re-open.
+      bufferToOpen = buildErrorBlock((err as Error).message) + userContent;
+      strippedBaseline = userContent;
+      isRetry = true;
+      continue;
+    }
+
+    // Emit parser warnings (once per successful parse).
+    for (const w of parseResult.warnings) {
+      console.error(`warning: ${w}`);
+    }
+
+    // Dependency-existence validation — batch-report every unknown id.
+    if (parseResult.task.dependencies.length > 0) {
+      const allIds = new Set<string>();
+      for (const fp of discoverTaskFiles(cwd)) {
+        const d = readTasksFile(fp);
+        if (d) for (const t of d.tasks) allIds.add(t.id);
+      }
+      const unknown = parseResult.task.dependencies.filter((id) => !allIds.has(id));
+      if (unknown.length > 0) {
+        const msg =
+          `Unknown dependency task ID(s): ${unknown.join(", ")}. ` +
+          `Each dependency must reference an existing task.`;
+        if (dryRun) {
+          fail(msg);
+        }
+        bufferToOpen = buildErrorBlock(msg) + userContent;
+        strippedBaseline = userContent;
+        isRetry = true;
+        continue;
+      }
+    }
+
+    parsed = parseResult.task;
+    break;
+  }
+
+  if (!parsed) {
+    fail(
+      `too many parse failures — ${MAX_EDIT_RETRIES} attempts exhausted; tasks.json unchanged`,
     );
-  } catch (err) {
-    fail((err as Error).message);
   }
 
-  // 7. Empty buffer: exit 0 with a message; no write, no delete.
-  if (editedContent.trim() === "") {
-    console.error("edit aborted (empty buffer)");
-    return;
-  }
-
-  // 8. Unchanged buffer (strict byte equality): exit 0 without writing.
-  if (editedContent === initialBuffer) {
-    console.error("edit aborted (no changes)");
-    return;
-  }
-
-  // 9. Parse the edited buffer. (FORGE-4.4 will add crontab-style retry here.)
-  let parseResult;
-  try {
-    parseResult = parseBuffer(editedContent);
-  } catch (err) {
-    fail((err as Error).message);
-  }
-
-  // 10. Emit any warnings the parser surfaced.
-  for (const w of parseResult.warnings) {
-    console.error(`warning: ${w}`);
-  }
-
-  // 11. HOOK for FORGE-4.4: optimistic-lock check goes here.
-
-  const parsed = parseResult.task;
-
-  // 13. --dry-run: print field-by-field diff of changes; do not write.
+  // --dry-run: single-shot, print diff against the originally-loaded task,
+  // and skip the lock check. tasks.json is never written.
   if (dryRun) {
     printEditDiff(task, parsed);
     return;
   }
 
-  // 14. Write via updateTask (honors the replaceAcceptance:[] patch).
+  // Optimistic lock: re-read the task from disk and compare hashes.
+  // --force skips the check and overwrites any concurrent change.
+  if (!force) {
+    const currentFiles = discoverTaskFiles(cwd);
+    let reloaded: Task | null = null;
+    for (const fp of currentFiles) {
+      const d = readTasksFile(fp);
+      if (!d) continue;
+      const t = d.tasks.find((x) => x.id === taskId);
+      if (t) {
+        reloaded = t;
+        break;
+      }
+    }
+    if (reloaded) {
+      const newHash = hashTask(reloaded);
+      if (openHash !== newHash) {
+        // Surface a field-level diff of the SERVER-SIDE change so the user
+        // sees exactly what they would overwrite by re-running with --force.
+        console.error("server-side changes detected:");
+        printEditDiffToStderr(task, {
+          title: reloaded.title,
+          priority: reloaded.priority,
+          labels: reloaded.labels,
+          dependencies: reloaded.dependencies,
+          description: reloaded.description,
+          design: reloaded.design,
+          acceptance: reloaded.acceptance,
+          notes: reloaded.notes,
+        });
+        fail(
+          "concurrent write detected. re-run with --force to overwrite, or exit-without-saving (already happened — no write occurred) to abort",
+        );
+      }
+    }
+  }
+
+  // Write via updateTask (honors the replaceAcceptance:[] patch).
   try {
     await updateTask(
       taskId,
@@ -1217,9 +1365,22 @@ interface ParsedForDiff {
 
 /**
  * Print a field-by-field `FIELD: <before> -> <after>` diff for every
- * editable field whose value changed. Used by --dry-run.
+ * editable field whose value changed. Used by --dry-run (stdout) and
+ * by the optimistic-lock conflict report (stderr).
  */
 function printEditDiff(before: Task, after: ParsedForDiff): void {
+  printEditDiffTo(before, after, console.log);
+}
+
+function printEditDiffToStderr(before: Task, after: ParsedForDiff): void {
+  printEditDiffTo(before, after, console.error);
+}
+
+function printEditDiffTo(
+  before: Task,
+  after: ParsedForDiff,
+  sink: (line: string) => void,
+): void {
   const fmt = (v: unknown): string => {
     if (Array.isArray(v)) return JSON.stringify(v);
     if (v === "") return '""';
@@ -1240,11 +1401,11 @@ function printEditDiff(before: Task, after: ParsedForDiff): void {
     const bs = fmt(b);
     const as = fmt(a);
     if (bs === as) continue;
-    console.log(`${name}: ${bs} -> ${as}`);
+    sink(`${name}: ${bs} -> ${as}`);
     changed++;
   }
   if (changed === 0) {
-    console.log("(no changes)");
+    sink("(no changes)");
   }
 }
 
