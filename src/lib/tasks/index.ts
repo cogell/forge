@@ -42,6 +42,8 @@ export {
   updateTask,
   addComment,
   addLabel,
+  deleteTask,
+  type DeletePreview,
 } from "./mutations";
 
 // Validation

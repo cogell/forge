@@ -748,4 +748,105 @@ describe("forge tasks CLI", () => {
     const data = readJson(join(tmp, "plans", "auth", TASKS_FILENAME));
     expect(data.tasks[0].priority).toBe(0);
   });
+
+  // ── forge tasks delete ──────────────────────────────────────
+
+  it("delete without --confirm prints preview and exits non-zero", async () => {
+    const tasksData: TasksFile = {
+      version: 1,
+      epics: [{ id: "TEST-1", title: "P1", created: "2026-03-30" }],
+      tasks: [
+        { id: "TEST-1.1", title: "To delete", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: null },
+      ],
+    };
+    setupFeature(tmp, "auth", tasksData);
+
+    try { await tasks(["delete", "TEST-1.1"]); } catch {}
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    const logged = logSpy.mock.calls.map((c: string[]) => c.join(" ")).join("\n");
+    expect(logged).toContain("TEST-1.1");
+    expect(logged).toContain("To delete");
+
+    // File must be unchanged
+    const data = readJson(join(tmp, "plans", "auth", TASKS_FILENAME));
+    expect(data.tasks).toHaveLength(1);
+  });
+
+  it("delete --confirm with no descendants removes task atomically", async () => {
+    const tasksData: TasksFile = {
+      version: 1,
+      epics: [{ id: "TEST-1", title: "P1", created: "2026-03-30" }],
+      tasks: [
+        { id: "TEST-1.1", title: "A", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: null },
+        { id: "TEST-1.2", title: "B", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: null },
+      ],
+    };
+    setupFeature(tmp, "auth", tasksData);
+
+    await tasks(["delete", "TEST-1.1", "--confirm"]);
+
+    const data = readJson(join(tmp, "plans", "auth", TASKS_FILENAME));
+    expect(data.tasks).toHaveLength(1);
+    expect(data.tasks[0].id).toBe("TEST-1.2");
+  });
+
+  it("delete --confirm strips the deleted id from other tasks' dependencies", async () => {
+    const tasksData: TasksFile = {
+      version: 1,
+      epics: [{ id: "TEST-1", title: "P1", created: "2026-03-30" }],
+      tasks: [
+        { id: "TEST-1.1", title: "Target", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: null },
+        { id: "TEST-1.2", title: "Dependent", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: ["TEST-1.1"], comments: [], closeReason: null },
+      ],
+    };
+    setupFeature(tmp, "auth", tasksData);
+
+    await tasks(["delete", "TEST-1.1", "--confirm"]);
+
+    const data = readJson(join(tmp, "plans", "auth", TASKS_FILENAME));
+    expect(data.tasks).toHaveLength(1);
+    expect(data.tasks[0].id).toBe("TEST-1.2");
+    expect(data.tasks[0].dependencies).toEqual([]);
+  });
+
+  it("delete --confirm on a task with descendants exits non-zero and leaves file unmodified", async () => {
+    const tasksData: TasksFile = {
+      version: 1,
+      epics: [{ id: "TEST-1", title: "P1", created: "2026-03-30" }],
+      tasks: [
+        { id: "TEST-1.1", title: "Parent", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: null },
+        { id: "TEST-1.1.1", title: "Child", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: null },
+      ],
+    };
+    setupFeature(tmp, "auth", tasksData);
+    const before = readFileSync(join(tmp, "plans", "auth", TASKS_FILENAME), "utf-8");
+
+    try { await tasks(["delete", "TEST-1.1", "--confirm"]); } catch {}
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    const errorMsg = errorSpy.mock.calls.map((c: string[]) => c[0]).join(" ");
+    expect(errorMsg).toContain("TEST-1.1.1");
+
+    const after = readFileSync(join(tmp, "plans", "auth", TASKS_FILENAME), "utf-8");
+    expect(after).toBe(before);
+  });
+
+  it("delete --confirm on unknown id exits non-zero with a clear message", async () => {
+    const tasksData: TasksFile = {
+      version: 1,
+      epics: [{ id: "TEST-1", title: "P1", created: "2026-03-30" }],
+      tasks: [
+        { id: "TEST-1.1", title: "A", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: null },
+      ],
+    };
+    setupFeature(tmp, "auth", tasksData);
+    const before = readFileSync(join(tmp, "plans", "auth", TASKS_FILENAME), "utf-8");
+
+    try { await tasks(["delete", "UNKNOWN-9.9", "--confirm"]); } catch {}
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    const errorMsg = errorSpy.mock.calls.map((c: string[]) => c[0]).join(" ");
+    expect(errorMsg).toMatch(/not found|UNKNOWN-9\.9/);
+
+    const after = readFileSync(join(tmp, "plans", "auth", TASKS_FILENAME), "utf-8");
+    expect(after).toBe(before);
+  });
 });
