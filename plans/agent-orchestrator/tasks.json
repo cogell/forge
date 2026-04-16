@@ -1,0 +1,108 @@
+{
+  "version": 1,
+  "epics": [
+    {
+      "id": "FORGE-1",
+      "title": "Phase 1: Checkpoint-driven run with review gates",
+      "created": "2026-04-02"
+    }
+  ],
+  "tasks": [
+    {
+      "id": "FORGE-1.1",
+      "title": "Add js-yaml dependency",
+      "status": "open",
+      "priority": 0,
+      "labels": [
+        "complexity:1,phase:1"
+      ],
+      "description": "WHAT: Add js-yaml as a direct dependency and @types/js-yaml as a dev dependency. Currently js-yaml is only a transitive dep of gray-matter and not importable under pnpm strict mode.",
+      "design": "HOW: Run pnpm add js-yaml && pnpm add -D @types/js-yaml. Verify import works with a simple smoke test: import { dump, load } from 'js-yaml'.",
+      "acceptance": [
+        "- [ ] js-yaml appears in package.json dependencies\n- [ ] @types/js-yaml appears in package.json devDependencies\n- [ ] import { dump, load } from 'js-yaml' resolves without error"
+      ],
+      "notes": "Files: package.json (modify)",
+      "dependencies": [],
+      "comments": [],
+      "closeReason": null
+    },
+    {
+      "id": "FORGE-1.2",
+      "title": "Checkpoint module with types and I/O",
+      "status": "open",
+      "priority": 1,
+      "labels": [
+        "complexity:5,phase:1"
+      ],
+      "description": "WHAT: Create the checkpoint module that defines the PipelineCheckpoint type and provides read/write/clear functions for plans/<feature>/pipeline.yaml. This is the core data layer that the CLI and skill prompt depend on.",
+      "design": "HOW:\n\nTypes in src/lib/checkpoint.ts:\n  type PipelineStepName = 'plan' | 'plan-review-gate' | 'tasks' | 'tasks-review-gate' | 'execute' | 'docs' | 'pr'\n  type PipelineStepStatus = 'pending' | 'in-progress' | 'complete' | 'failed'\n  \n  interface ReviewResult {\n    verdict: 'PASS' | 'FAIL'\n    critical: number\n    major: number\n    minor: number\n    issues: string[]  // one-liner per issue\n  }\n  \n  interface PipelineStep {\n    status: PipelineStepStatus\n    passes?: number           // only for review-gate steps\n    lastResult?: ReviewResult // only for review-gate steps\n  }\n  \n  interface PipelineCheckpoint {\n    feature: string\n    started: string  // ISO timestamp\n    steps: Record<PipelineStepName, PipelineStep>\n  }\n\nConstants:\n  MAX_REVIEW_PASSES = 7\n  PIPELINE_FILENAME = 'pipeline.yaml'\n  PIPELINE_STEPS: PipelineStepName[] = ['plan', 'plan-review-gate', 'tasks', 'tasks-review-gate', 'execute', 'docs', 'pr']\n\nFunctions:\n  readCheckpoint(feature: string, cwd?: string): PipelineCheckpoint | null\n    - Resolves plans/<feature>/pipeline.yaml via resolveRepoRoot\n    - Returns null if file missing or YAML malformed\n    - Uses js-yaml load() for parsing\n  \n  writeCheckpoint(feature: string, checkpoint: PipelineCheckpoint, cwd?: string): void\n    - Writes to plans/<feature>/pipeline.yaml using js-yaml dump()\n    - Creates parent dir if needed\n  \n  clearCheckpoint(feature: string, cwd?: string): void\n    - Deletes plans/<feature>/pipeline.yaml\n    - No-op if file doesn't exist\n  \n  createCheckpoint(feature: string): PipelineCheckpoint\n    - Returns a new checkpoint with all steps set to pending and started = now",
+      "acceptance": [
+        "- [ ] readCheckpoint returns null when no pipeline.yaml exists\n- [ ] readCheckpoint returns a valid PipelineCheckpoint when pipeline.yaml exists\n- [ ] readCheckpoint returns null on malformed YAML (does not throw)\n- [ ] writeCheckpoint creates/overwrites plans/<feature>/pipeline.yaml with valid YAML\n- [ ] Checkpoint YAML includes feature name, started timestamp, and all 7 steps with status\n- [ ] Review-gate steps include passes count, last verdict, severity counts, and issue one-liners\n- [ ] clearCheckpoint deletes plans/<feature>/pipeline.yaml\n- [ ] clearCheckpoint does not throw if file doesn't exist\n- [ ] createCheckpoint returns checkpoint with all steps pending and current timestamp\n- [ ] Round-trip: writeCheckpoint then readCheckpoint returns equivalent data"
+      ],
+      "notes": "Files: src/lib/checkpoint.ts (create), src/lib/__tests__/checkpoint.test.ts (create)",
+      "dependencies": [
+        "FORGE-1.1"
+      ],
+      "comments": [],
+      "closeReason": null
+    },
+    {
+      "id": "FORGE-1.3",
+      "title": "CLI: --reset flag and checkpoint display in forge run",
+      "status": "open",
+      "priority": 1,
+      "labels": [
+        "complexity:4,phase:1"
+      ],
+      "description": "WHAT: Extend forge run CLI to support --reset flag and display checkpoint state on resume. When --reset is present, delete the checkpoint and exit (bypassing all precondition checks). When resuming, print which steps are complete and where the pipeline will resume. Include checkpoint in --json output.",
+      "design": "HOW: Modify src/commands/run.ts:\n\nThe existing code already extracts feature via args.find(a => !a.startsWith('-')), which naturally skips flags like --reset. Use this same pattern — no need for separate pre-extraction parsing.\n\n1. Check for --reset in args (args.includes('--reset')).\n2. Extract feature using existing pattern: args.find(a => !a.startsWith('-')).\n3. If --reset:\n   - If no feature: print 'Usage: forge run --reset <feature-name>', exit(1)\n   - Call clearCheckpoint(feature, cwd) — no precondition checks needed\n   - Print 'Checkpoint cleared for <feature>'\n   - Return early\n4. Continue with existing precondition checks (PRD, forge.json, git clean).\n5. After precondition checks, call readCheckpoint(feature, cwd).\n6. If checkpoint exists:\n   - Find first step with status != 'complete'\n   - If that step has status 'failed': print failure info (step name + lastResult.issues), exit(1)\n   - Print 'Resuming from step: <stepName> (steps 1-N already complete)'\n7. For --json output: add checkpoint field (PipelineCheckpoint | null) to the response object.\n   Shape: { status: 'ready', feature, checks, steps, checkpoint }\n\nImport readCheckpoint, clearCheckpoint from '../lib/checkpoint'.",
+      "acceptance": [
+        "- [ ] forge run --reset <feature> deletes checkpoint and exits with confirmation — bypasses precondition checks\n- [ ] forge run --reset with no feature prints usage error and exits with code 1\n- [ ] forge run <feature> with no checkpoint shows full pipeline steps (existing behavior preserved)\n- [ ] forge run <feature> with partial checkpoint prints 'Resuming from step: <step>' — does not prompt for confirmation\n- [ ] forge run <feature> with failed step in checkpoint prints failure info and exits\n- [ ] forge run <feature> --json includes checkpoint field (null when no checkpoint)"
+      ],
+      "notes": "Files: src/commands/run.ts (modify), src/commands/__tests__/run.test.ts (create)",
+      "dependencies": [
+        "FORGE-1.2"
+      ],
+      "comments": [],
+      "closeReason": null
+    },
+    {
+      "id": "FORGE-1.4",
+      "title": "Rewrite run.md skill prompt and update run-process.md guidance",
+      "status": "open",
+      "priority": 1,
+      "labels": [
+        "complexity:6,phase:1"
+      ],
+      "description": "WHAT: Rewrite plugin/commands/run.md to include the full 7-step pipeline with review gates on plan and tasks creation, checkpoint maintenance throughout, and resume-from-checkpoint behavior. Also update guidance/run-process.md to document the review gates, 7-pass cap, checkpoint format, and restart behavior. These two files must be written together to stay consistent.",
+      "design": "HOW: Rewrite plugin/commands/run.md preserving the existing task agent, review loop, salvage agent, and error recovery sections. Add/change:\n\n1. Pipeline overview section listing all 7 steps: plan, plan-review-gate, tasks, tasks-review-gate, execute, docs, pr\n\n2. Checkpoint protocol section:\n   - On start: run forge run <feature> to get state, then read plans/<feature>/pipeline.yaml\n   - If checkpoint exists with completed steps: skip them, resume from first incomplete\n   - If checkpoint has in-progress review gate: resume at recorded pass number\n   - If checkpoint has failed step: stop and report (the CLI already handles this)\n   - If no checkpoint: create one with createCheckpoint, write it\n   - After completing each step: update checkpoint status to complete, write file\n   - After each review pass: update checkpoint passes count and lastResult, write file\n\n3. Review gate protocol (for plan-review-gate and tasks-review-gate steps):\n   - Update checkpoint status to in-progress\n   - Self-review: run the self-review checklist inline (source coverage, placeholder scan, name consistency per review-gates.md)\n   - Fix any issues found in self-review\n   - Fresh-context review loop (max MAX_REVIEW_PASSES = 7 passes):\n     - Spawn review agent via Agent tool with fresh context\n     - Review agent uses plan-review or tasks-review criteria from review-gates.md\n     - If PASS: update checkpoint lastResult with verdict PASS, mark step complete\n     - If FAIL: update checkpoint with pass number, verdict FAIL, severity counts, issue summaries\n     - Fix the issues\n     - Loop\n   - If 7 passes all FAIL: mark step failed in checkpoint, stop pipeline, report unresolved issues to user\n\n4. Preserved sections (keep existing content):\n   - Task Agent prompt template (TDD: RED → GREEN → REFACTOR)\n   - Review Loop for task execution (the per-task review, distinct from artifact review gates)\n   - Salvage Agent\n   - Fix Agent\n   - Error Recovery (DAG is source of truth, forge tasks ready for resume)\n\n5. Updated Phase 0 Setup:\n   - Step 1: Read/create checkpoint\n   - Step 2: If plan step not complete, run /forge:plan process, mark complete\n   - Step 3: Run plan-review-gate (review gate protocol above)\n   - Step 4: If tasks step not complete, run /forge:tasks process, mark complete\n   - Step 5: Run tasks-review-gate (review gate protocol above)\n   - Step 6-8: execute, docs, pr (existing logic with checkpoint updates)",
+      "acceptance": [
+        "- [ ] run.md includes the 7-step pipeline with review gates\n- [ ] run.md instructs the agent to read/create checkpoint at start\n- [ ] run.md instructs the agent to skip completed steps on resume\n- [ ] run.md instructs the agent to run self-review then fresh-context review loop for plan-review-gate and tasks-review-gate\n- [ ] run.md specifies the 7-pass cap with escalation to failed status and human notification\n- [ ] run.md instructs the agent to update the checkpoint after each step and review pass\n- [ ] run.md instructs the agent to resume review loops at the correct pass number when checkpoint shows in-progress review gate\n- [ ] run.md preserves existing task agent, review loop, salvage agent, and error recovery content\n- [ ] run-process.md documents review gates for plan and tasks creation\n- [ ] run-process.md documents the 7-pass cap as forge:run-specific\n- [ ] run-process.md documents the checkpoint file format with example YAML\n- [ ] run-process.md documents restart behavior (resume, failed, clearing)"
+      ],
+      "notes": "Files: plugin/commands/run.md (modify), guidance/run-process.md (modify)",
+      "dependencies": [
+        "FORGE-1.2"
+      ],
+      "comments": [],
+      "closeReason": null
+    },
+    {
+      "id": "FORGE-1.5",
+      "title": "Update run-process.md guidance with review gates and checkpoint docs",
+      "status": "closed",
+      "priority": 2,
+      "labels": [
+        "complexity:3,phase:1"
+      ],
+      "description": "WHAT: Update guidance/run-process.md to document the review gates for plan and tasks creation, the 7-pass cap, and the checkpoint file format and restart behavior. This is the deep reference that the skill prompt points to.",
+      "design": "HOW: Add new sections to guidance/run-process.md:\n\n1. Add 'Review Gates for Plan and Tasks' section after Prerequisites:\n   - Explain that /forge:run now runs review gates on plan and tasks creation\n   - Reference review-gates.md for the review protocol\n   - Document the 7-pass cap as forge:run-specific (does not override review-gates.md general guidance which has no fixed cap)\n   - Describe self-review + fresh-context review loop flow\n\n2. Add 'Checkpoint File' section:\n   - Location: plans/<feature>/pipeline.yaml\n   - Format: YAML with feature, started timestamp, 7 named steps\n   - Each step has status (pending/in-progress/complete/failed)\n   - Review-gate steps have passes, lastResult (verdict, severity counts, issues)\n   - Include the example YAML from the PRD\n\n3. Add 'Restart Behavior' section:\n   - On restart: read checkpoint, skip completed steps\n   - In-progress steps: re-run (review gates resume at recorded pass number)\n   - Failed steps: print failure info, exit\n   - Missing/malformed checkpoint: treat as fresh start\n   - Clearing: forge run --reset <feature>",
+      "acceptance": [
+        "- [ ] run-process.md documents review gates for plan and tasks creation\n- [ ] run-process.md documents the 7-pass cap as forge:run-specific\n- [ ] run-process.md documents the checkpoint file format with example YAML\n- [ ] run-process.md documents restart behavior (resume, failed, clearing)"
+      ],
+      "notes": "Files: guidance/run-process.md (modify)",
+      "dependencies": [],
+      "comments": [],
+      "closeReason": "Collapsed into FORGE-1.4 per review feedback — tightly coupled docs that should be written together"
+    }
+  ]
+}
