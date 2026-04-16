@@ -53,7 +53,7 @@ const VALUE_FLAGS = new Set([
 /** Boolean flags that don't consume a value. */
 const BOOLEAN_FLAGS = new Set([
   "--json", "--project", "--force", "--help", "-h",
-  "--confirm", "--children", "--full",
+  "--confirm", "--children", "--full", "--replace",
 ]);
 
 const TASKS_HELP = `
@@ -189,6 +189,9 @@ Options:
   --design <text>        Design notes
   --notes <text>         Implementation notes
   --acceptance, -a <txt>  Append acceptance criterion (repeatable)
+  --replace              When paired with --acceptance, replace the task's
+                         acceptance[] array instead of appending. No-op if
+                         --acceptance is not also provided.
   --label, -l <label>    Append label (repeatable, idempotent)
   --json                 Output as JSON
   --help, -h             Show this help
@@ -630,10 +633,12 @@ async function handleUpdate(args: string[], positional: string[], json: boolean,
   const fields: Partial<Pick<Task, "status" | "priority" | "title" | "description" | "design" | "notes">> & {
     addAcceptance?: string[];
     addLabels?: string[];
+    replaceAcceptance?: boolean;
   } = {};
 
   const acceptance: string[] = [];
   const labels: string[] = [];
+  const replace = args.includes("--replace");
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
@@ -662,12 +667,19 @@ async function handleUpdate(args: string[], positional: string[], json: boolean,
 
   if (acceptance.length > 0) fields.addAcceptance = acceptance;
   if (labels.length > 0) fields.addLabels = labels;
+  if (replace && acceptance.length > 0) fields.replaceAcceptance = true;
+
+  // --replace without --acceptance is a no-op: exit 0, no write, no error.
+  if (replace && acceptance.length === 0 && Object.keys(fields).length === 0) {
+    if (json) console.log(JSON.stringify({ status: "noop", id }));
+    return;
+  }
 
   if (Object.keys(fields).length === 0) {
     fail(
       "No fields to update. Available flags:\n" +
       "  --status, --priority/-p, --title, -d/--description,\n" +
-      "  --design, --notes, --acceptance/-a, --label/-l\n" +
+      "  --design, --notes, --acceptance/-a, --label/-l, --replace\n" +
       "See also: forge tasks close, forge tasks comment, forge tasks dep"
     );
   }

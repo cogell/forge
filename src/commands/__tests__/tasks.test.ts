@@ -836,6 +836,61 @@ describe("forge tasks CLI", () => {
     expect(data.tasks[0].acceptance).toEqual(["Works correctly"]);
   });
 
+  it("update --replace with --acceptance replaces existing acceptance array", async () => {
+    const tasksData: TasksFile = {
+      version: 1,
+      epics: [{ id: "TEST-1", title: "P1", created: "2026-03-30" }],
+      tasks: [
+        { id: "TEST-1.1", title: "T", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: ["old-1", "old-2", "old-3"], notes: "", dependencies: [], comments: [], closeReason: null },
+      ],
+    };
+    setupFeature(tmp, "auth", tasksData);
+    await tasks(["update", "TEST-1.1", "--acceptance", "first", "--acceptance", "second", "--replace"]);
+
+    const data = readJson(join(tmp, "plans", "auth", TASKS_FILENAME));
+    expect(data.tasks[0].acceptance).toEqual(["first", "second"]);
+  });
+
+  it("update without --replace preserves append behavior (backward-compatible)", async () => {
+    const tasksData: TasksFile = {
+      version: 1,
+      epics: [{ id: "TEST-1", title: "P1", created: "2026-03-30" }],
+      tasks: [
+        { id: "TEST-1.1", title: "T", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: ["existing"], notes: "", dependencies: [], comments: [], closeReason: null },
+      ],
+    };
+    setupFeature(tmp, "auth", tasksData);
+    await tasks(["update", "TEST-1.1", "--acceptance", "added"]);
+
+    const data = readJson(join(tmp, "plans", "auth", TASKS_FILENAME));
+    expect(data.tasks[0].acceptance).toEqual(["existing", "added"]);
+  });
+
+  it("update --replace without --acceptance is a no-op (exit 0, no write, no error)", async () => {
+    const tasksData: TasksFile = {
+      version: 1,
+      epics: [{ id: "TEST-1", title: "P1", created: "2026-03-30" }],
+      tasks: [
+        { id: "TEST-1.1", title: "T", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: ["keep-1", "keep-2"], notes: "", dependencies: [], comments: [], closeReason: null },
+      ],
+    };
+    setupFeature(tmp, "auth", tasksData);
+    const filePath = join(tmp, "plans", "auth", TASKS_FILENAME);
+    const before = readFileSync(filePath, "utf-8");
+
+    await tasks(["update", "TEST-1.1", "--replace"]);
+
+    // No error, no exit(1)
+    expect(exitSpy).not.toHaveBeenCalled();
+    // File unchanged byte-for-byte
+    expect(readFileSync(filePath, "utf-8")).toBe(before);
+  });
+
+  it("update --help mentions --replace flag", async () => {
+    await tasks(["update", "--help"]);
+    expect(logSpy.mock.calls.some((c: string[]) => c[0]?.includes("--replace"))).toBe(true);
+  });
+
   // ── Improved error messages (#4) ─────────────────────────────
 
   it("show not-found error includes usage hint", async () => {
