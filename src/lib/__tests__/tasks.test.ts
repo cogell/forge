@@ -24,6 +24,7 @@ import {
   updateTask,
   addComment,
   addLabel,
+  deleteTask,
   validateDag,
   resolveTasksPath,
   isValidPrefix,
@@ -1793,5 +1794,152 @@ describe("getReadyTasks priority sorting", () => {
     expect(ready[0].priority).toBe(0);
     expect(ready[1].priority).toBe(2);
     expect(ready[2].priority).toBe(4);
+  });
+});
+
+// ─── deleteTask ──────────────────────────────────────────────────────
+
+describe("deleteTask", () => {
+  let tmpDir: string;
+
+  beforeEach(() => { tmpDir = makeTmpDir(); setupProject(tmpDir, "FORGE"); });
+  afterEach(() => { rmSync(tmpDir, { recursive: true, force: true }); });
+
+  it("without --confirm returns a DeletePreview with descendants and dependents", async () => {
+    const tasks: Task[] = [
+      { id: "FORGE-1.1", title: "Parent", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: null },
+      { id: "FORGE-1.1.1", title: "Child A", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: null },
+      { id: "FORGE-1.1.2", title: "Child B", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: null },
+      { id: "FORGE-1.2", title: "Dependent", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: ["FORGE-1.1"], comments: [], closeReason: null },
+    ];
+    setupFeature(tmpDir, "auth", { version: 1, epics: [{ id: "FORGE-1", title: "Auth", created: "2026-03-30" }], tasks });
+
+    const preview = await deleteTask("FORGE-1.1", { confirm: false }, tmpDir);
+    expect(preview).toBeDefined();
+    expect(preview!.id).toBe("FORGE-1.1");
+    expect(preview!.title).toBe("Parent");
+    expect(preview!.descendants.sort()).toEqual(["FORGE-1.1.1", "FORGE-1.1.2"]);
+    expect(preview!.dependents).toEqual(["FORGE-1.2"]);
+
+    // file unchanged
+    const data = readJson(join(tmpDir, "plans", "auth", TASKS_FILENAME));
+    expect(data.tasks).toHaveLength(4);
+  });
+
+  it("without --confirm does not modify tasks.json", async () => {
+    const tasks: Task[] = [
+      { id: "FORGE-1.1", title: "A", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: null },
+    ];
+    setupFeature(tmpDir, "auth", { version: 1, epics: [{ id: "FORGE-1", title: "Auth", created: "2026-03-30" }], tasks });
+    const before = readFileSync(join(tmpDir, "plans", "auth", TASKS_FILENAME), "utf-8");
+
+    await deleteTask("FORGE-1.1", { confirm: false }, tmpDir);
+
+    const after = readFileSync(join(tmpDir, "plans", "auth", TASKS_FILENAME), "utf-8");
+    expect(after).toBe(before);
+  });
+
+  it("with --confirm and no descendants removes the task", async () => {
+    const tasks: Task[] = [
+      { id: "FORGE-1.1", title: "A", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: null },
+      { id: "FORGE-1.2", title: "B", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: null },
+    ];
+    setupFeature(tmpDir, "auth", { version: 1, epics: [{ id: "FORGE-1", title: "Auth", created: "2026-03-30" }], tasks });
+
+    const result = await deleteTask("FORGE-1.1", { confirm: true }, tmpDir);
+    expect(result).toBeUndefined();
+
+    const data = readJson(join(tmpDir, "plans", "auth", TASKS_FILENAME));
+    expect(data.tasks).toHaveLength(1);
+    expect(data.tasks[0].id).toBe("FORGE-1.2");
+  });
+
+  it("with --confirm removes the deleted id from other tasks' dependencies[]", async () => {
+    const tasks: Task[] = [
+      { id: "FORGE-1.1", title: "Target", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: null },
+      { id: "FORGE-1.2", title: "Dependent A", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: ["FORGE-1.1"], comments: [], closeReason: null },
+      { id: "FORGE-1.3", title: "Dependent B", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: ["FORGE-1.1", "FORGE-1.2"], comments: [], closeReason: null },
+    ];
+    setupFeature(tmpDir, "auth", { version: 1, epics: [{ id: "FORGE-1", title: "Auth", created: "2026-03-30" }], tasks });
+
+    await deleteTask("FORGE-1.1", { confirm: true }, tmpDir);
+
+    const data = readJson(join(tmpDir, "plans", "auth", TASKS_FILENAME));
+    expect(data.tasks).toHaveLength(2);
+    const byId: Record<string, any> = {};
+    for (const t of data.tasks) byId[t.id] = t;
+    expect(byId["FORGE-1.2"].dependencies).toEqual([]);
+    expect(byId["FORGE-1.3"].dependencies).toEqual(["FORGE-1.2"]);
+  });
+
+  it("with --confirm cleans dangling deps across feature files", async () => {
+    const authTasks: Task[] = [
+      { id: "FORGE-1.1", title: "Target", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: null },
+    ];
+    const pipeTasks: Task[] = [
+      { id: "FORGE-2.1", title: "Cross-file dependent", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: ["FORGE-1.1"], comments: [], closeReason: null },
+    ];
+    setupFeature(tmpDir, "auth", { version: 1, epics: [{ id: "FORGE-1", title: "Auth", created: "2026-03-30" }], tasks: authTasks });
+    setupFeature(tmpDir, "pipeline", { version: 1, epics: [{ id: "FORGE-2", title: "Pipe", created: "2026-03-30" }], tasks: pipeTasks });
+
+    await deleteTask("FORGE-1.1", { confirm: true }, tmpDir);
+
+    const authData = readJson(join(tmpDir, "plans", "auth", TASKS_FILENAME));
+    expect(authData.tasks).toHaveLength(0);
+
+    const pipeData = readJson(join(tmpDir, "plans", "pipeline", TASKS_FILENAME));
+    expect(pipeData.tasks[0].dependencies).toEqual([]);
+  });
+
+  it("with --confirm and descendants throws and does not modify files", async () => {
+    const tasks: Task[] = [
+      { id: "FORGE-1.1", title: "Parent", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: null },
+      { id: "FORGE-1.1.1", title: "Child", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: null },
+    ];
+    setupFeature(tmpDir, "auth", { version: 1, epics: [{ id: "FORGE-1", title: "Auth", created: "2026-03-30" }], tasks });
+    const before = readFileSync(join(tmpDir, "plans", "auth", TASKS_FILENAME), "utf-8");
+
+    expect(deleteTask("FORGE-1.1", { confirm: true }, tmpDir)).rejects.toThrow(/FORGE-1\.1\.1/);
+
+    // Wait a tick for the rejection to settle, then re-read.
+    // The file MUST remain unmodified.
+    await new Promise((r) => setTimeout(r, 10));
+    const after = readFileSync(join(tmpDir, "plans", "auth", TASKS_FILENAME), "utf-8");
+    expect(after).toBe(before);
+  });
+
+  it("throws on unknown id and leaves tasks.json unmodified", async () => {
+    const tasks: Task[] = [
+      { id: "FORGE-1.1", title: "A", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: null },
+    ];
+    setupFeature(tmpDir, "auth", { version: 1, epics: [{ id: "FORGE-1", title: "Auth", created: "2026-03-30" }], tasks });
+    const before = readFileSync(join(tmpDir, "plans", "auth", TASKS_FILENAME), "utf-8");
+
+    expect(deleteTask("FORGE-999.9", { confirm: true }, tmpDir)).rejects.toThrow(/not found/);
+
+    await new Promise((r) => setTimeout(r, 10));
+    const after = readFileSync(join(tmpDir, "plans", "auth", TASKS_FILENAME), "utf-8");
+    expect(after).toBe(before);
+  });
+
+  it("throws on unknown id even without --confirm", async () => {
+    const tasks: Task[] = [
+      { id: "FORGE-1.1", title: "A", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: null },
+    ];
+    setupFeature(tmpDir, "auth", { version: 1, epics: [{ id: "FORGE-1", title: "Auth", created: "2026-03-30" }], tasks });
+
+    expect(deleteTask("FORGE-999.9", { confirm: false }, tmpDir)).rejects.toThrow(/not found/);
+  });
+
+  it("preview descendants use exact id-prefix match (no substring false-positives)", async () => {
+    // FORGE-1.10 must not be considered a descendant of FORGE-1.1
+    const tasks: Task[] = [
+      { id: "FORGE-1.1", title: "A", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: null },
+      { id: "FORGE-1.10", title: "Unrelated sibling", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: null },
+    ];
+    setupFeature(tmpDir, "auth", { version: 1, epics: [{ id: "FORGE-1", title: "Auth", created: "2026-03-30" }], tasks });
+
+    const preview = await deleteTask("FORGE-1.1", { confirm: false }, tmpDir);
+    expect(preview!.descendants).toEqual([]);
   });
 });

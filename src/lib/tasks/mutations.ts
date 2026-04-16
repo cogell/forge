@@ -380,6 +380,123 @@ export async function addComment(id: string, message: string, cwd?: string): Pro
 }
 
 /**
+ * Preview of a pending deleteTask operation.
+ */
+export interface DeletePreview {
+  id: string;
+  title: string;
+  /** IDs of tasks whose id starts with `${id}.` (would block a delete). */
+  descendants: string[];
+  /** IDs of other tasks that list `id` in their dependencies[]. */
+  dependents: string[];
+}
+
+/**
+ * Delete a task (with descendant-scan).
+ *
+ * Without `opts.confirm`: scans all task files and returns a DeletePreview.
+ * No write occurs. Unknown ids throw.
+ *
+ * With `opts.confirm`:
+ *  - If the task has any descendants (tasks whose id starts with `${id}.`),
+ *    throws with a message naming them. No write occurs.
+ *  - Otherwise removes the task atomically from its file and, in the same
+ *    pass, strips `id` from every other task's `dependencies[]` across all
+ *    task files.
+ *
+ * Returns `DeletePreview` in dry-run mode, `void` after a successful delete.
+ */
+export async function deleteTask(
+  id: string,
+  opts: { confirm: boolean },
+  cwd?: string
+): Promise<DeletePreview | void> {
+  const root = resolveRepoRoot(cwd);
+  const allFiles = discoverTaskFilesFromRoot(root);
+
+  // Locate the task and gather descendants + dependents across every file.
+  let ownerFile: string | null = null;
+  let ownerTask: Task | null = null;
+  const descendants: string[] = [];
+  const dependents: string[] = [];
+
+  for (const fp of allFiles) {
+    const data = readTasksFile(fp);
+    if (!data) continue;
+    for (const t of data.tasks) {
+      if (t.id === id) {
+        ownerFile = fp;
+        ownerTask = t;
+      } else if (t.id.startsWith(id + ".")) {
+        descendants.push(t.id);
+      }
+      if (t.id !== id && t.dependencies.includes(id)) {
+        dependents.push(t.id);
+      }
+    }
+  }
+
+  if (!ownerFile || !ownerTask) {
+    throw new Error(`Task "${id}" not found in any tasks.json file.`);
+  }
+
+  if (!opts.confirm) {
+    return {
+      id,
+      title: ownerTask.title,
+      descendants,
+      dependents,
+    };
+  }
+
+  if (descendants.length > 0) {
+    throw new Error(
+      `Cannot delete ${id}: it has ${descendants.length} descendant(s): ${descendants.join(", ")}. ` +
+        `Delete the descendants first.`
+    );
+  }
+
+  // Perform the atomic delete: remove the task from its own file, and strip
+  // the id from dependencies[] in every other file.
+  await withLock(ownerFile, () => {
+    const data = readTasksFile(ownerFile!);
+    if (!data) throw new Error(`${ownerFile} disappeared during write`);
+    const idx = data.tasks.findIndex((t) => t.id === id);
+    if (idx === -1) throw new Error(`Task "${id}" disappeared from ${ownerFile} during write`);
+    data.tasks.splice(idx, 1);
+    // Also clean dangling deps inside the same file before writing.
+    for (const t of data.tasks) {
+      if (t.dependencies.includes(id)) {
+        t.dependencies = t.dependencies.filter((d) => d !== id);
+      }
+    }
+    writeTasksFileRaw(ownerFile!, data);
+  });
+
+  for (const fp of allFiles) {
+    if (fp === ownerFile) continue;
+    // Skip files that don't reference the id at all.
+    const preview = readTasksFile(fp);
+    if (!preview) continue;
+    const needsCleanup = preview.tasks.some((t) => t.dependencies.includes(id));
+    if (!needsCleanup) continue;
+
+    await withLock(fp, () => {
+      const data = readTasksFile(fp);
+      if (!data) return;
+      let changed = false;
+      for (const t of data.tasks) {
+        if (t.dependencies.includes(id)) {
+          t.dependencies = t.dependencies.filter((d) => d !== id);
+          changed = true;
+        }
+      }
+      if (changed) writeTasksFileRaw(fp, data);
+    });
+  }
+}
+
+/**
  * Add a label to a task (idempotent — no duplicates).
  */
 export async function addLabel(id: string, label: string, cwd?: string): Promise<void> {

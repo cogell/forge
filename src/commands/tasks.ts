@@ -19,6 +19,7 @@ import {
   updateTask,
   addComment,
   addLabel,
+  deleteTask,
   validateDag,
   discoverTaskFiles,
   getReadyTasks,
@@ -34,7 +35,7 @@ import {
 
 const RESERVED = [
   "ready", "list", "show", "create", "close", "update",
-  "comment", "label", "dep", "validate", "epic",
+  "comment", "label", "dep", "validate", "epic", "delete",
 ];
 
 const VALID_STATUSES: TaskStatus[] = ["open", "in_progress", "closed"];
@@ -48,7 +49,7 @@ const VALUE_FLAGS = new Set([
 
 /** Boolean flags that don't consume a value. */
 const BOOLEAN_FLAGS = new Set([
-  "--json", "--project", "--force", "--help", "-h",
+  "--json", "--project", "--force", "--help", "-h", "--confirm",
 ]);
 
 const TASKS_HELP = `
@@ -64,6 +65,7 @@ Subcommands:
   epic create <feature|--project> "title"   Create an epic
   update <task-id> [--field value...]       Update task fields
   close <task-id>                           Close a task (validates dependencies)
+  delete <task-id> --confirm                Delete a task (refuses if it has descendants)
   comment <task-id> "message"               Add a comment to a task
   label <task-id> <label>                   Add a label to a task
   dep add|remove <blocked> <blocker>        Manage task dependencies
@@ -179,6 +181,26 @@ Options:
   --help, -h             Show this help
 
 Note: To close a task, use 'forge tasks close <id>' instead.
+`.trim(),
+
+  delete: `
+forge tasks delete — delete a task
+
+Usage: forge tasks delete <task-id> [--confirm]
+
+Arguments:
+  task-id         The task to delete (looked up across all features)
+
+Options:
+  --confirm       Actually perform the delete (without it, prints a preview)
+  --json          Output as JSON
+  --help, -h      Show this help
+
+Notes:
+  - Without --confirm, prints a preview and exits non-zero.
+  - Refuses to delete a task that has any descendants (ID-prefix match).
+  - On successful delete, strips the task's ID from every other task's
+    dependencies[] across all feature files.
 `.trim(),
 
   close: `
@@ -342,6 +364,7 @@ async function tasksInner(args: string[], json: boolean, project: boolean): Prom
       case "list": return handleList(positional, json, project, cwd);
       case "show": return handleShow(positional, json, cwd);
       case "ready": return handleReady(positional, json, cwd);
+      case "delete": return handleDelete(positional, args, json, cwd);
       default:
         fail(`Subcommand "${subcommand}" is not yet implemented.`);
     }
@@ -810,6 +833,52 @@ async function handleReady(positional: string[], json: boolean, cwd: string): Pr
   for (const task of ready) {
     const lbl = task.labels.length > 0 ? task.labels.join(", ") : "";
     console.log(`${task.id.padEnd(20)} ${task.title.slice(0, 40).padEnd(40)} P${task.priority}   ${lbl}`);
+  }
+}
+
+// ── Delete handler ──────────────────────────────────────
+
+async function handleDelete(
+  positional: string[],
+  args: string[],
+  json: boolean,
+  cwd: string
+): Promise<void> {
+  const id = positional[1];
+  if (!id) fail("Usage: forge tasks delete <task-id> [--confirm]");
+
+  const confirm = args.includes("--confirm");
+
+  try {
+    const result = await deleteTask(id, { confirm }, cwd);
+
+    if (!confirm) {
+      // Dry-run: print preview and exit non-zero.
+      const preview = result!;
+      if (json) {
+        console.log(JSON.stringify({ status: "preview", ...preview }));
+      } else {
+        console.log(`Would delete ${preview.id} — ${preview.title}`);
+        if (preview.descendants.length > 0) {
+          console.log(`\nWARNING: ${preview.id} has ${preview.descendants.length} descendant(s):`);
+          for (const d of preview.descendants) console.log(`  - ${d}`);
+          console.log(`\nRefusing to delete a task with descendants. Delete children first.`);
+        } else {
+          console.log(`(no descendants)`);
+        }
+        if (preview.dependents.length > 0) {
+          console.log(`\n${preview.dependents.length} task(s) list ${preview.id} as a dependency and would be cleaned up:`);
+          for (const d of preview.dependents) console.log(`  - ${d}`);
+        }
+        console.log(`\nRe-run with --confirm to perform the delete.`);
+      }
+      process.exit(1);
+    }
+
+    if (json) console.log(JSON.stringify({ status: "deleted", id }));
+    else console.log(`Deleted task ${id}`);
+  } catch (err) {
+    fail((err as Error).message);
   }
 }
 
