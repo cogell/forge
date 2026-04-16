@@ -213,7 +213,7 @@ Options:
   --help, -h      Show this help
 
 Notes:
-  - Without --confirm, prints a preview and exits non-zero.
+  - Without --confirm, prints a preview and exits 0 (no write performed).
   - Refuses to delete a task that has any descendants (ID-prefix match).
   - On successful delete, strips the task's ID from every other task's
     dependencies[] across all feature files.
@@ -1002,7 +1002,10 @@ async function handleDelete(
     const result = await deleteTask(id, { confirm }, cwd);
 
     if (!confirm) {
-      // Dry-run: print preview and exit non-zero.
+      // Dry-run: print preview and exit 0 so scripts can chain `&&`.
+      // If the task has descendants, confirm would be refused — we surface
+      // that via the WARNING banner but still exit 0, because the dry run
+      // itself succeeded.
       const preview = result!;
       if (json) {
         console.log(JSON.stringify({ status: "preview", ...preview }));
@@ -1021,7 +1024,7 @@ async function handleDelete(
         }
         console.log(`\nRe-run with --confirm to perform the delete.`);
       }
-      process.exit(1);
+      return;
     }
 
     if (json) console.log(JSON.stringify({ status: "deleted", id }));

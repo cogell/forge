@@ -943,7 +943,7 @@ describe("forge tasks CLI", () => {
 
   // ── forge tasks delete ──────────────────────────────────────
 
-  it("delete without --confirm prints preview and exits non-zero", async () => {
+  it("delete without --confirm prints preview and exits 0 without writing", async () => {
     const tasksData: TasksFile = {
       version: 1,
       epics: [{ id: "TEST-1", title: "P1", created: "2026-03-30" }],
@@ -953,11 +953,13 @@ describe("forge tasks CLI", () => {
     };
     setupFeature(tmp, "auth", tasksData);
 
-    try { await tasks(["delete", "TEST-1.1"]); } catch {}
-    expect(exitSpy).toHaveBeenCalledWith(1);
+    await tasks(["delete", "TEST-1.1"]);
+    // Dry-run is a successful no-op: process.exit must NOT have been called.
+    expect(exitSpy).not.toHaveBeenCalled();
     const logged = logSpy.mock.calls.map((c: string[]) => c.join(" ")).join("\n");
     expect(logged).toContain("TEST-1.1");
     expect(logged).toContain("To delete");
+    expect(logged).toContain("Re-run with --confirm");
 
     // File must be unchanged
     const data = readJson(join(tmp, "plans", "auth", TASKS_FILENAME));

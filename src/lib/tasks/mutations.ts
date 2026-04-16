@@ -471,9 +471,17 @@ export interface DeletePreview {
  * With `opts.confirm`:
  *  - If the task has any descendants (tasks whose id starts with `${id}.`),
  *    throws with a message naming them. No write occurs.
- *  - Otherwise removes the task atomically from its file and, in the same
- *    pass, strips `id` from every other task's `dependencies[]` across all
- *    task files.
+ *  - Otherwise removes the task from its owner file atomically (under that
+ *    file's lock, with a re-scan of all files for descendants inside the
+ *    lock to narrow TOCTOU) and then sweeps every other task file to strip
+ *    `id` from dangling `dependencies[]`.
+ *
+ * Concurrency caveat: cross-file cleanup is NOT atomic — each file is
+ * locked and written independently. A crash mid-sweep can leave dangling
+ * `dependencies[]` entries in files that weren't reached yet. Similarly,
+ * a concurrent createTask that targets a different feature file can add
+ * a descendant between the owner-file write and a later sweep. Both are
+ * edge cases in a single-user CLI but are not prevented here.
  *
  * Returns `DeletePreview` in dry-run mode, `void` after a successful delete.
  */
@@ -527,9 +535,28 @@ export async function deleteTask(
     );
   }
 
-  // Perform the atomic delete: remove the task from its own file, and strip
-  // the id from dependencies[] in every other file.
+  // Remove the task from its owner file under lock. Before mutating, re-scan
+  // every task file for descendants so a concurrent createTask that snuck a
+  // child in between the initial scan and here is still caught (narrowest
+  // TOCTOU window we can give without a project-level lock).
   await withLock(ownerFile, () => {
+    const lateDescendants: string[] = [];
+    for (const fp of allFiles) {
+      const d = readTasksFile(fp);
+      if (!d) continue;
+      for (const t of d.tasks) {
+        if (t.id !== id && t.id.startsWith(id + ".")) {
+          lateDescendants.push(t.id);
+        }
+      }
+    }
+    if (lateDescendants.length > 0) {
+      throw new Error(
+        `Cannot delete ${id}: it has ${lateDescendants.length} descendant(s): ${lateDescendants.join(", ")}. ` +
+          `Delete the descendants first.`
+      );
+    }
+
     const data = readTasksFile(ownerFile!);
     if (!data) throw new Error(`${ownerFile} disappeared during write`);
     const idx = data.tasks.findIndex((t) => t.id === id);
