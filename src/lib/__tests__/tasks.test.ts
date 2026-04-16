@@ -1851,6 +1851,126 @@ describe("getReadyTasks priority sorting", () => {
   });
 });
 
+// ─── getReadyTasks label filter ──────────────────────────────────────
+
+describe("getReadyTasks label filter", () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = makeTmpDir();
+    mkdirSync(join(tmpDir, ".git"), { recursive: true });
+  });
+
+  afterEach(() => {
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("with no filter opts returns all ready tasks (backward compat)", () => {
+    const data = makeTasksFile(
+      [{ id: "feat-1", title: "Phase 1", created: "2026-03-30" }],
+      [
+        makeTask({ id: "feat-1.1", title: "A", status: "open", labels: ["frontend"] }),
+        makeTask({ id: "feat-1.2", title: "B", status: "open", labels: ["backend"] }),
+      ],
+    );
+    writePlansDir(tmpDir, { "my-feature": data });
+
+    const result = getReadyTasks(tmpDir);
+    expect(result.map((t) => t.id).sort()).toEqual(["feat-1.1", "feat-1.2"]);
+  });
+
+  it("filters to tasks containing a single label", () => {
+    const data = makeTasksFile(
+      [{ id: "feat-1", title: "Phase 1", created: "2026-03-30" }],
+      [
+        makeTask({ id: "feat-1.1", title: "A", status: "open", labels: ["gate:human"] }),
+        makeTask({ id: "feat-1.2", title: "B", status: "open", labels: ["backend"] }),
+        makeTask({ id: "feat-1.3", title: "C", status: "open", labels: [] }),
+      ],
+    );
+    writePlansDir(tmpDir, { "my-feature": data });
+
+    const result = getReadyTasks(tmpDir, undefined, { labels: ["gate:human"] });
+    expect(result).toHaveLength(1);
+    expect(result[0].id).toBe("feat-1.1");
+  });
+
+  it("AND semantics: two labels both required", () => {
+    const data = makeTasksFile(
+      [{ id: "feat-1", title: "Phase 1", created: "2026-03-30" }],
+      [
+        makeTask({ id: "feat-1.1", title: "A", status: "open", labels: ["frontend", "needs-design"] }),
+        makeTask({ id: "feat-1.2", title: "B", status: "open", labels: ["frontend"] }),
+        makeTask({ id: "feat-1.3", title: "C", status: "open", labels: ["needs-design"] }),
+        makeTask({ id: "feat-1.4", title: "D", status: "open", labels: [] }),
+      ],
+    );
+    writePlansDir(tmpDir, { "my-feature": data });
+
+    const result = getReadyTasks(tmpDir, undefined, { labels: ["frontend", "needs-design"] });
+    expect(result).toHaveLength(1);
+    expect(result[0].id).toBe("feat-1.1");
+  });
+
+  it("empty labels array behaves like no filter", () => {
+    const data = makeTasksFile(
+      [{ id: "feat-1", title: "Phase 1", created: "2026-03-30" }],
+      [
+        makeTask({ id: "feat-1.1", title: "A", status: "open", labels: ["frontend"] }),
+        makeTask({ id: "feat-1.2", title: "B", status: "open", labels: [] }),
+      ],
+    );
+    writePlansDir(tmpDir, { "my-feature": data });
+
+    const result = getReadyTasks(tmpDir, undefined, { labels: [] });
+    expect(result).toHaveLength(2);
+  });
+
+  it("returns empty array when label does not match any task", () => {
+    const data = makeTasksFile(
+      [{ id: "feat-1", title: "Phase 1", created: "2026-03-30" }],
+      [
+        makeTask({ id: "feat-1.1", title: "A", status: "open", labels: ["frontend"] }),
+      ],
+    );
+    writePlansDir(tmpDir, { "my-feature": data });
+
+    const result = getReadyTasks(tmpDir, undefined, { labels: ["no-matches"] });
+    expect(result).toEqual([]);
+  });
+
+  it("phase label (phase:5) works as any other label filter", () => {
+    const data = makeTasksFile(
+      [{ id: "feat-1", title: "Phase 1", created: "2026-03-30" }],
+      [
+        makeTask({ id: "feat-1.1", title: "A", status: "open", labels: ["phase:5"] }),
+        makeTask({ id: "feat-1.2", title: "B", status: "open", labels: ["phase:6"] }),
+      ],
+    );
+    writePlansDir(tmpDir, { "my-feature": data });
+
+    const result = getReadyTasks(tmpDir, undefined, { labels: ["phase:5"] });
+    expect(result).toHaveLength(1);
+    expect(result[0].id).toBe("feat-1.1");
+  });
+
+  it("composes with feature scoping", () => {
+    const dataA = makeTasksFile(
+      [{ id: "alpha-1", title: "Alpha Phase", created: "2026-03-30" }],
+      [makeTask({ id: "alpha-1.1", title: "Alpha Task", status: "open", labels: ["gate:human"] })],
+    );
+    const dataB = makeTasksFile(
+      [{ id: "beta-1", title: "Beta Phase", created: "2026-03-30" }],
+      [makeTask({ id: "beta-1.1", title: "Beta Task", status: "open", labels: ["gate:human"] })],
+    );
+    writePlansDir(tmpDir, { alpha: dataA, beta: dataB });
+
+    const result = getReadyTasks(tmpDir, "alpha", { labels: ["gate:human"] });
+    expect(result).toHaveLength(1);
+    expect(result[0].id).toBe("alpha-1.1");
+  });
+});
+
 // ─── deleteTask ──────────────────────────────────────────────────────
 
 describe("deleteTask", () => {

@@ -944,4 +944,90 @@ describe("forge tasks CLI", () => {
     const after = readFileSync(join(tmp, "plans", "auth", TASKS_FILENAME), "utf-8");
     expect(after).toBe(before);
   });
+
+  // ── ready with --label and --phase filters (FORGE-3.4) ────────
+
+  function readyFixture(): TasksFile {
+    return {
+      version: 1,
+      epics: [{ id: "TEST-1", title: "Phase", created: "2026-03-30" }],
+      tasks: [
+        { id: "TEST-1.1", title: "Gate + phase5", status: "open", priority: 1, labels: ["gate:human", "phase:5"], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: null },
+        { id: "TEST-1.2", title: "Frontend + needs-design", status: "open", priority: 2, labels: ["frontend", "needs-design"], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: null },
+        { id: "TEST-1.3", title: "Frontend only", status: "open", priority: 2, labels: ["frontend"], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: null },
+        { id: "TEST-1.4", title: "Phase5 + needs-design", status: "open", priority: 3, labels: ["phase:5", "needs-design"], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: null },
+        { id: "TEST-1.5", title: "Unlabeled", status: "open", priority: 4, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: null },
+      ],
+    };
+  }
+
+  it("ready with no filter flags returns all ready tasks (backward compat)", async () => {
+    setupFeature(tmp, "auth", readyFixture());
+    await tasks(["ready", "--json"]);
+
+    const output = logSpy.mock.calls[0][0];
+    const parsed = JSON.parse(output);
+    expect(parsed).toHaveLength(5);
+  });
+
+  it("ready --label gate:human returns only tasks with that label", async () => {
+    setupFeature(tmp, "auth", readyFixture());
+    await tasks(["ready", "--label", "gate:human", "--json"]);
+
+    const output = logSpy.mock.calls[0][0];
+    const parsed = JSON.parse(output);
+    expect(parsed).toHaveLength(1);
+    expect(parsed[0].id).toBe("TEST-1.1");
+  });
+
+  it("ready with two --label flags intersects (AND)", async () => {
+    setupFeature(tmp, "auth", readyFixture());
+    await tasks(["ready", "--label", "frontend", "--label", "needs-design", "--json"]);
+
+    const output = logSpy.mock.calls[0][0];
+    const parsed = JSON.parse(output);
+    expect(parsed).toHaveLength(1);
+    expect(parsed[0].id).toBe("TEST-1.2");
+  });
+
+  it("ready --phase 5 is equivalent to --label phase:5", async () => {
+    setupFeature(tmp, "auth", readyFixture());
+    await tasks(["ready", "--phase", "5", "--json"]);
+    const phaseOut = JSON.parse(logSpy.mock.calls[0][0]);
+
+    logSpy.mockClear();
+    await tasks(["ready", "--label", "phase:5", "--json"]);
+    const labelOut = JSON.parse(logSpy.mock.calls[0][0]);
+
+    expect(phaseOut).toEqual(labelOut);
+    const ids = phaseOut.map((t: any) => t.id).sort();
+    expect(ids).toEqual(["TEST-1.1", "TEST-1.4"]);
+  });
+
+  it("ready --phase 5 --label needs-design intersects phase with label", async () => {
+    setupFeature(tmp, "auth", readyFixture());
+    await tasks(["ready", "--phase", "5", "--label", "needs-design", "--json"]);
+
+    const output = logSpy.mock.calls[0][0];
+    const parsed = JSON.parse(output);
+    expect(parsed).toHaveLength(1);
+    expect(parsed[0].id).toBe("TEST-1.4");
+  });
+
+  it("ready --label no-matches returns empty JSON array", async () => {
+    setupFeature(tmp, "auth", readyFixture());
+    await tasks(["ready", "--label", "no-matches", "--json"]);
+
+    const output = logSpy.mock.calls[0][0];
+    const parsed = JSON.parse(output);
+    expect(parsed).toEqual([]);
+  });
+
+  it("ready --label no-matches in non-JSON mode shows empty list", async () => {
+    setupFeature(tmp, "auth", readyFixture());
+    await tasks(["ready", "--label", "no-matches"]);
+
+    const logs = logSpy.mock.calls.map((c: string[]) => c[0]).join("\n");
+    expect(logs).toContain("No ready tasks");
+  });
 });

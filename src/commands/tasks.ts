@@ -26,6 +26,7 @@ import {
   resolveTasksPath,
   SCHEMA_VERSION,
   TASKS_FILENAME,
+  PHASE_LABEL_PREFIX,
   type ValidateScope,
   type TasksFile,
   type Task,
@@ -121,8 +122,10 @@ Arguments:
   feature         Filter to a specific feature (omit to scan all)
 
 Options:
-  --json          Output as JSON
-  --help, -h      Show this help
+  --label, -l <L>  Only include tasks whose labels contain L (repeatable, AND)
+  --phase <N>      Sugar for --label phase:N (composes with --label)
+  --json           Output as JSON
+  --help, -h       Show this help
 `.trim(),
 
   create: `
@@ -366,7 +369,7 @@ async function tasksInner(args: string[], json: boolean, project: boolean): Prom
       case "dep": return handleDep(positional, json, cwd);
       case "list": return handleList(positional, json, project, cwd);
       case "show": return handleShow(positional, json, cwd);
-      case "ready": return handleReady(positional, json, cwd);
+      case "ready": return handleReady(args, positional, json, cwd);
       case "delete": return handleDelete(positional, args, json, cwd);
       default:
         fail(`Subcommand "${subcommand}" is not yet implemented.`);
@@ -829,10 +832,23 @@ async function handleShow(positional: string[], json: boolean, cwd: string): Pro
 
 // ── Ready handler ───────────────────────────────────────
 
-async function handleReady(positional: string[], json: boolean, cwd: string): Promise<void> {
+async function handleReady(args: string[], positional: string[], json: boolean, cwd: string): Promise<void> {
   // --project is intentionally ignored: ready always scans all files when no feature specified
   const feature = positional[1] || undefined;
-  const ready = getReadyTasks(cwd, feature);
+
+  // Collect repeatable --label/-l and optional --phase <N> (sugar for --label phase:N)
+  const labels: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    const next = args[i + 1];
+    if ((arg === "--label" || arg === "-l") && next) { labels.push(next); i++; }
+    else if (arg === "--phase" && next) {
+      labels.push(`${PHASE_LABEL_PREFIX}${next}`);
+      i++;
+    }
+  }
+
+  const ready = getReadyTasks(cwd, feature, labels.length > 0 ? { labels } : undefined);
 
   if (json) { console.log(JSON.stringify(ready, null, 2)); return; }
 

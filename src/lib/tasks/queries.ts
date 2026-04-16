@@ -79,6 +79,14 @@ export function queryFeatureTasks(feature: string, cwd?: string): EpicInfo | nul
 }
 
 /**
+ * Options for filtering ready tasks.
+ */
+export interface GetReadyTasksOptions {
+  /** Require each listed label to be present on the task (AND semantics). */
+  labels?: string[];
+}
+
+/**
  * Get ready (unblocked) leaf tasks.
  *
  * A task is "ready" when:
@@ -89,8 +97,15 @@ export function queryFeatureTasks(feature: string, cwd?: string): EpicInfo | nul
  * When `feature` is provided, only tasks from that feature's tasks.json
  * are returned, but ALL task files are loaded to resolve cross-file
  * dependency statuses.
+ *
+ * When `opts.labels` is provided and non-empty, the result is further
+ * filtered to tasks whose `labels[]` contains ALL of the listed labels.
  */
-export function getReadyTasks(cwd?: string, feature?: string): ReadyTask[] {
+export function getReadyTasks(
+  cwd?: string,
+  feature?: string,
+  opts?: GetReadyTasksOptions,
+): ReadyTask[] {
   const root = resolveRepoRoot(cwd);
 
   const allFiles = discoverTaskFilesFromRoot(root);
@@ -137,6 +152,8 @@ export function getReadyTasks(cwd?: string, feature?: string): ReadyTask[] {
 
   const ready: ReadyTask[] = [];
 
+  const requiredLabels = opts?.labels ?? [];
+
   for (const task of candidateTasks) {
     if (containerSet.has(task.id)) continue;
     if (task.status !== "open") continue;
@@ -150,6 +167,17 @@ export function getReadyTasks(cwd?: string, feature?: string): ReadyTask[] {
       }
     }
     if (!allDepsReady) continue;
+
+    if (requiredLabels.length > 0) {
+      let hasAllLabels = true;
+      for (const label of requiredLabels) {
+        if (!task.labels.includes(label)) {
+          hasAllLabels = false;
+          break;
+        }
+      }
+      if (!hasAllLabels) continue;
+    }
 
     ready.push({
       id: task.id,
