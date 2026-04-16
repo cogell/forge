@@ -4,7 +4,7 @@
  */
 
 import { existsSync, mkdirSync } from "fs";
-import { join } from "path";
+import { basename, dirname, join } from "path";
 import { withLock } from "../lock";
 import { resolveRepoRoot } from "../worktree";
 import type { Task, TasksFile, TaskStatus } from "./types";
@@ -29,11 +29,32 @@ export async function writeTasksFile(filePath: string, data: TasksFile): Promise
 }
 
 /**
+ * Derive a human-friendly feature name from a tasks.json file path.
+ * `plans/tasks.json` → "project"; `plans/<feature>/tasks.json` → "<feature>".
+ */
+function featureNameFromFilePath(filePath: string, plansDir: string): string {
+  const parent = dirname(filePath);
+  if (parent === plansDir) return "project";
+  return basename(parent);
+}
+
+/**
  * Create an epic with globally sequential numbering.
  * Uses a project-level lock (plans/.epic-lock) to prevent duplicate IDs
  * when concurrent createEpic calls target different feature files.
+ *
+ * When `opts.explicitId` is provided, the epic is created with that id.
+ * The id shape is validated BEFORE the lock is acquired; duplicate-id
+ * detection runs inside the .epic-lock critical section via an existence
+ * scan over every tasks.json under plans/. On duplicate, throws with a
+ * message naming the conflicting feature and epic title; no write occurs.
  */
-export async function createEpic(feature: string | null, title: string, cwd?: string): Promise<string> {
+export async function createEpic(
+  feature: string | null,
+  title: string,
+  cwd?: string,
+  opts?: { explicitId?: string }
+): Promise<string> {
   const root = resolveRepoRoot(cwd);
   const prefix = readProjectPrefix(root);
 
@@ -42,6 +63,17 @@ export async function createEpic(feature: string | null, title: string, cwd?: st
 
   const featureDir = feature ? join(plansDir, feature) : plansDir;
   const filePath = join(featureDir, TASKS_FILENAME);
+
+  // Pre-lock shape validation for --id: reject malformed ids before
+  // we acquire the cross-feature lock, so a bad input never blocks or
+  // touches on-disk state.
+  const explicitId = opts?.explicitId;
+  if (explicitId !== undefined) {
+    const shape = new RegExp(`^${prefix}-\\d+$`);
+    if (!shape.test(explicitId)) {
+      throw new Error(`invalid epic id ${explicitId}: expected ${prefix}-<number>`);
+    }
+  }
 
   // Lock ordering: .epic-lock THEN per-file lock. All code that
   // acquires both must follow this order to avoid deadlocks.
@@ -56,6 +88,15 @@ export async function createEpic(feature: string | null, title: string, cwd?: st
       const d = readTasksFile(fp);
       if (!d) continue;
       for (const epic of d.epics) {
+        // Duplicate-id existence scan (inside the lock). When an explicit
+        // id was requested, flag the collision before computing maxN so
+        // the caller sees the conflicting feature + title.
+        if (explicitId !== undefined && epic.id === explicitId) {
+          const owner = featureNameFromFilePath(fp, plansDir);
+          throw new Error(
+            `epic id ${explicitId} already exists in feature "${owner}" (title: "${epic.title}")`
+          );
+        }
         const match = epic.id.match(epicPattern);
         if (match) {
           const n = parseInt(match[1], 10);
@@ -64,7 +105,7 @@ export async function createEpic(feature: string | null, title: string, cwd?: st
       }
     }
 
-    const newId = `${prefix}-${maxN + 1}`;
+    const newId = explicitId ?? `${prefix}-${maxN + 1}`;
     const today = new Date().toISOString().split("T")[0];
 
     return withLock(filePath, () => {

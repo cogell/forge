@@ -158,13 +158,16 @@ Options:
   epic: `
 forge tasks epic — manage epics
 
-Usage: forge tasks epic create <feature|--project> "title"
+Usage: forge tasks epic create <feature|--project> "title" [--id <explicit-id>]
 
 Arguments:
   feature         The feature this epic belongs to
   title           Epic title (quoted string)
 
 Options:
+  --id <id>       Use explicit epic ID (e.g. FORGE-9). Rejected if it
+                  collides with any existing epic across the project.
+                  Without --id, the next sequential ID is assigned.
   --project       Create a project-level epic
   --json          Output as JSON
   --help, -h      Show this help
@@ -435,7 +438,7 @@ async function handleScaffold(
 // ── Epic create handler ─────────────────────────────────
 
 async function handleEpic(
-  _args: string[],
+  args: string[],
   positional: string[],
   json: boolean,
   project: boolean,
@@ -460,10 +463,30 @@ async function handleEpic(
   if (!title) fail('Missing epic title. Usage: forge tasks epic create <feature|--project> "title"');
   if (!project && !feature) fail('Missing feature name. Usage: forge tasks epic create <feature> "title"');
 
-  const id = await createEpic(feature, title, cwd);
+  // Parse optional --id flag. VALUE_FLAGS already recognises --id so
+  // extractPositional excludes its value from positional[] — we re-scan
+  // args[] here to recover it.
+  let explicitId: string | undefined;
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === "--id" && args[i + 1]) {
+      explicitId = args[i + 1];
+      break;
+    }
+  }
 
-  if (json) console.log(JSON.stringify({ id, title, feature: feature || "project" }));
-  else console.log(`Created epic: ${id} — ${title}`);
+  try {
+    const id = await createEpic(
+      feature,
+      title,
+      cwd,
+      explicitId !== undefined ? { explicitId } : undefined
+    );
+
+    if (json) console.log(JSON.stringify({ id, title, feature: feature || "project" }));
+    else console.log(`Created epic: ${id} — ${title}`);
+  } catch (err) {
+    fail((err as Error).message);
+  }
 }
 
 // ── Create task handler ─────────────────────────────────

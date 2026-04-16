@@ -344,6 +344,48 @@ describe("forge tasks CLI", () => {
     expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("Unknown epic subcommand"));
   });
 
+  // ── epic create --id (FORGE-3.6) ──────────────────────────────
+
+  it("epic create --id uses the explicit id verbatim", async () => {
+    setupFeature(tmp, "auth");
+    await tasks(["auth"]);
+
+    await tasks(["epic", "create", "auth", "--id", "TEST-9", "Pinned epic"]);
+    const data = readJson(join(tmp, "plans", "auth", TASKS_FILENAME));
+    expect(data.epics).toHaveLength(1);
+    expect(data.epics[0].id).toBe("TEST-9");
+    expect(data.epics[0].title).toBe("Pinned epic");
+  });
+
+  it("epic create --id rejects malformed id before writing", async () => {
+    setupFeature(tmp, "auth");
+    await tasks(["auth"]);
+
+    try { await tasks(["epic", "create", "auth", "--id", "BADFORMAT", "X"]); } catch {}
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("invalid epic id BADFORMAT"));
+    // tasks.json remains an empty scaffold (no epics added)
+    const data = readJson(join(tmp, "plans", "auth", TASKS_FILENAME));
+    expect(data.epics).toEqual([]);
+  });
+
+  it("epic create --id rejects a duplicate and names the conflicting feature/title", async () => {
+    setupFeature(tmp, "auth", {
+      version: 1,
+      epics: [{ id: "TEST-9", title: "Original", created: "2026-03-30" }],
+      tasks: [],
+    });
+    setupFeature(tmp, "pipeline");
+    await tasks(["pipeline"]);
+
+    try { await tasks(["epic", "create", "pipeline", "--id", "TEST-9", "Duplicate"]); } catch {}
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringMatching(/TEST-9.*auth.*Original/));
+    // pipeline tasks.json unmodified
+    const pipelineData = readJson(join(tmp, "plans", "pipeline", TASKS_FILENAME));
+    expect(pipelineData.epics).toEqual([]);
+  });
+
   // ── handleList all features (#5) ──────────────────────────────
 
   it("list with no feature aggregates all task files", async () => {
