@@ -1459,6 +1459,16 @@ describe("updateTask", () => {
     const task = readJson(join(tmpDir, "plans", "auth", TASKS_FILENAME)).tasks[0];
     expect(task.acceptance).toEqual(["existing", "added"]);
   });
+
+  it("replaceAcceptance with an empty addAcceptance clears the acceptance array (FORGE-4.3)", async () => {
+    const tasks: Task[] = [
+      { id: "FORGE-1.1", title: "T", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: ["ac-1", "ac-2", "ac-3"], notes: "", dependencies: [], comments: [], closeReason: null },
+    ];
+    setupFeature(tmpDir, "auth", { version: 1, epics: [{ id: "FORGE-1", title: "Auth", created: "2026-03-30" }], tasks });
+    await updateTask("FORGE-1.1", { replaceAcceptance: true, addAcceptance: [] }, tmpDir);
+    const task = readJson(join(tmpDir, "plans", "auth", TASKS_FILENAME)).tasks[0];
+    expect(task.acceptance).toEqual([]);
+  });
 });
 
 // ─── addComment ─────────────────────────────────────────────────────
