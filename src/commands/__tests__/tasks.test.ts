@@ -522,6 +522,101 @@ describe("forge tasks CLI", () => {
     expect(errorSpy.mock.calls.some((c: string[]) => c[0]?.includes("Invalid priority"))).toBe(true);
   });
 
+  // ── --blocked-by flag (FORGE-3.3) ───────────────────────────────
+
+  it("create --blocked-by adds a single dependency", async () => {
+    const tasksData: TasksFile = {
+      version: 1,
+      epics: [{ id: "TEST-1", title: "P1", created: "2026-03-30" }],
+      tasks: [
+        { id: "TEST-1.1", title: "Blocker", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: null },
+      ],
+    };
+    setupFeature(tmp, "auth", tasksData);
+
+    await tasks(["create", "auth", "Blocked task", "--parent", "TEST-1", "--blocked-by", "TEST-1.1"]);
+    const data = readJson(join(tmp, "plans", "auth", TASKS_FILENAME));
+    const created = data.tasks.find((t: any) => t.title === "Blocked task");
+    expect(created).toBeDefined();
+    expect(created.dependencies).toEqual(["TEST-1.1"]);
+  });
+
+  it("create --blocked-by is repeatable", async () => {
+    const tasksData: TasksFile = {
+      version: 1,
+      epics: [{ id: "TEST-1", title: "P1", created: "2026-03-30" }],
+      tasks: [
+        { id: "TEST-1.1", title: "A", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: null },
+        { id: "TEST-1.2", title: "B", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: null },
+      ],
+    };
+    setupFeature(tmp, "auth", tasksData);
+
+    await tasks(["create", "auth", "Blocked", "--parent", "TEST-1", "--blocked-by", "TEST-1.1", "--blocked-by", "TEST-1.2"]);
+    const data = readJson(join(tmp, "plans", "auth", TASKS_FILENAME));
+    const created = data.tasks.find((t: any) => t.title === "Blocked");
+    expect(created.dependencies).toEqual(["TEST-1.1", "TEST-1.2"]);
+  });
+
+  it("create --blocked-by UNKNOWN exits non-zero and does not write", async () => {
+    const tasksData: TasksFile = {
+      version: 1,
+      epics: [{ id: "TEST-1", title: "P1", created: "2026-03-30" }],
+      tasks: [],
+    };
+    setupFeature(tmp, "auth", tasksData);
+    const filePath = join(tmp, "plans", "auth", TASKS_FILENAME);
+    const before = readFileSync(filePath, "utf-8");
+
+    try {
+      await tasks(["create", "auth", "Blocked", "--parent", "TEST-1", "--blocked-by", "UNKNOWN-ID"]);
+    } catch {}
+
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    expect(errorSpy.mock.calls.some((c: string[]) => c[0]?.includes("UNKNOWN-ID"))).toBe(true);
+    expect(readFileSync(filePath, "utf-8")).toBe(before);
+  });
+
+  it("create --blocked-by batch error names all unknown ids", async () => {
+    const tasksData: TasksFile = {
+      version: 1,
+      epics: [{ id: "TEST-1", title: "P1", created: "2026-03-30" }],
+      tasks: [],
+    };
+    setupFeature(tmp, "auth", tasksData);
+
+    try {
+      await tasks(["create", "auth", "Blocked", "--parent", "TEST-1", "--blocked-by", "UNK-1", "--blocked-by", "UNK-2"]);
+    } catch {}
+
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    const errMsgs = errorSpy.mock.calls.map((c: string[]) => c[0]).join("\n");
+    expect(errMsgs).toContain("UNK-1");
+    expect(errMsgs).toContain("UNK-2");
+  });
+
+  it("create --blocked-by resolves cross-feature blocker ids", async () => {
+    const authData: TasksFile = {
+      version: 1,
+      epics: [{ id: "TEST-1", title: "P1", created: "2026-03-30" }],
+      tasks: [],
+    };
+    const pipeData: TasksFile = {
+      version: 1,
+      epics: [{ id: "TEST-2", title: "P2", created: "2026-03-30" }],
+      tasks: [
+        { id: "TEST-2.1", title: "Cross-blocker", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: null },
+      ],
+    };
+    setupFeature(tmp, "auth", authData);
+    setupFeature(tmp, "pipeline", pipeData);
+
+    await tasks(["create", "auth", "Cross blocked", "--parent", "TEST-1", "--blocked-by", "TEST-2.1"]);
+    const data = readJson(join(tmp, "plans", "auth", TASKS_FILENAME));
+    const created = data.tasks.find((t: any) => t.title === "Cross blocked");
+    expect(created.dependencies).toEqual(["TEST-2.1"]);
+  });
+
   it("update rejects --status closed with helpful message", async () => {
     const tasksData: TasksFile = {
       version: 1,

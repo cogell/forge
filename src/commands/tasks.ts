@@ -43,7 +43,7 @@ const VALID_STATUSES: TaskStatus[] = ["open", "in_progress", "closed"];
 const VALUE_FLAGS = new Set([
   "--parent", "--priority", "-p", "--acceptance", "-a", "--label", "-l",
   "-d", "--description", "--design", "--notes",
-  "--status", "--title", "--reason",
+  "--status", "--title", "--reason", "--blocked-by",
 ]);
 
 /** Boolean flags that don't consume a value. */
@@ -135,6 +135,7 @@ Options:
   --priority, -p <0-4>   Priority level (default: 2)
   --acceptance, -a <txt>  Acceptance criterion (repeatable)
   --label, -l <label>    Label to add (repeatable)
+  --blocked-by <id>      Blocker task ID for dependency (repeatable)
   -d, --description <t>  Short description
   --design <text>        Design notes
   --notes <text>         Implementation notes
@@ -461,6 +462,7 @@ async function handleCreate(
   let priority: number | undefined;
   const acceptance: string[] = [];
   const labels: string[] = [];
+  const blockedBy: string[] = [];
   let description: string | undefined;
   let design: string | undefined;
   let notes: string | undefined;
@@ -478,6 +480,7 @@ async function handleCreate(
     }
     else if ((arg === "--acceptance" || arg === "-a") && next) { acceptance.push(next); i++; }
     else if ((arg === "--label" || arg === "-l") && next) { labels.push(next); i++; }
+    else if (arg === "--blocked-by" && next) { blockedBy.push(next); i++; }
     else if ((arg === "-d" || arg === "--description") && next) { description = next; i++; }
     else if (arg === "--design" && next) { design = next; i++; }
     else if (arg === "--notes" && next) { notes = next; i++; }
@@ -498,13 +501,18 @@ async function handleCreate(
     }
   }
 
-  const id = await createTask(feature, title, parentId, {
-    priority, labels: labels.length > 0 ? labels : undefined,
-    description, design, acceptance: acceptance.length > 0 ? acceptance : undefined, notes,
-  }, cwd);
+  try {
+    const id = await createTask(feature, title, parentId, {
+      priority, labels: labels.length > 0 ? labels : undefined,
+      description, design, acceptance: acceptance.length > 0 ? acceptance : undefined, notes,
+      blockedBy: blockedBy.length > 0 ? blockedBy : undefined,
+    }, cwd);
 
-  if (json) console.log(JSON.stringify({ id, title, parent: parentId, feature: feature || "project" }));
-  else console.log(`Created task: ${id} — ${title}`);
+    if (json) console.log(JSON.stringify({ id, title, parent: parentId, feature: feature || "project" }));
+    else console.log(`Created task: ${id} — ${title}`);
+  } catch (err) {
+    fail((err as Error).message);
+  }
 }
 
 // ── Dep add/remove handler ──────────────────────────────

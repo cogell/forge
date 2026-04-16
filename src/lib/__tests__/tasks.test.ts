@@ -968,6 +968,60 @@ describe("createTask", () => {
     expect(task.labels).toEqual(["c:5"]);
     expect(task.acceptance).toEqual(["a", "b"]);
   });
+
+  it("accepts blockedBy and populates dependencies", async () => {
+    const existing: Task = { id: "FORGE-1.1", title: "Existing", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: null };
+    setupFeature(tmpDir, "auth", { version: 1, epics: [{ id: "FORGE-1", title: "Auth", created: "2026-03-30" }], tasks: [existing] });
+    await createTask("auth", "New", "FORGE-1", { blockedBy: ["FORGE-1.1"] }, tmpDir);
+    const newTask = readJson(join(tmpDir, "plans", "auth", TASKS_FILENAME)).tasks[1];
+    expect(newTask.dependencies).toEqual(["FORGE-1.1"]);
+  });
+
+  it("accepts multiple blockedBy ids", async () => {
+    const t1: Task = { id: "FORGE-1.1", title: "A", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: null };
+    const t2: Task = { id: "FORGE-1.2", title: "B", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: null };
+    setupFeature(tmpDir, "auth", { version: 1, epics: [{ id: "FORGE-1", title: "Auth", created: "2026-03-30" }], tasks: [t1, t2] });
+    await createTask("auth", "New", "FORGE-1", { blockedBy: ["FORGE-1.1", "FORGE-1.2"] }, tmpDir);
+    const newTask = readJson(join(tmpDir, "plans", "auth", TASKS_FILENAME)).tasks[2];
+    expect(newTask.dependencies).toEqual(["FORGE-1.1", "FORGE-1.2"]);
+  });
+
+  it("empty blockedBy leaves dependencies empty", async () => {
+    setupFeature(tmpDir, "auth", { version: 1, epics: [{ id: "FORGE-1", title: "Auth", created: "2026-03-30" }], tasks: [] });
+    await createTask("auth", "T", "FORGE-1", { blockedBy: [] }, tmpDir);
+    const newTask = readJson(join(tmpDir, "plans", "auth", TASKS_FILENAME)).tasks[0];
+    expect(newTask.dependencies).toEqual([]);
+  });
+
+  it("rejects unknown blockedBy id and does not modify tasks.json", async () => {
+    setupFeature(tmpDir, "auth", { version: 1, epics: [{ id: "FORGE-1", title: "Auth", created: "2026-03-30" }], tasks: [] });
+    const filePath = join(tmpDir, "plans", "auth", TASKS_FILENAME);
+    const before = readFileSync(filePath, "utf-8");
+    await expect(createTask("auth", "T", "FORGE-1", { blockedBy: ["FORGE-999"] }, tmpDir)).rejects.toThrow(/FORGE-999/);
+    expect(readFileSync(filePath, "utf-8")).toBe(before);
+  });
+
+  it("batch error names every unknown blockedBy id", async () => {
+    setupFeature(tmpDir, "auth", { version: 1, epics: [{ id: "FORGE-1", title: "Auth", created: "2026-03-30" }], tasks: [] });
+    let err: Error | null = null;
+    try {
+      await createTask("auth", "T", "FORGE-1", { blockedBy: ["FORGE-98", "FORGE-99"] }, tmpDir);
+    } catch (e) {
+      err = e as Error;
+    }
+    expect(err).not.toBeNull();
+    expect(err!.message).toContain("FORGE-98");
+    expect(err!.message).toContain("FORGE-99");
+  });
+
+  it("resolves blockedBy ids across feature files", async () => {
+    const otherTask: Task = { id: "FORGE-2.1", title: "Other", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: null };
+    setupFeature(tmpDir, "auth", { version: 1, epics: [{ id: "FORGE-1", title: "Auth", created: "2026-03-30" }], tasks: [] });
+    setupFeature(tmpDir, "pipeline", { version: 1, epics: [{ id: "FORGE-2", title: "Pipe", created: "2026-03-30" }], tasks: [otherTask] });
+    await createTask("auth", "New", "FORGE-1", { blockedBy: ["FORGE-2.1"] }, tmpDir);
+    const newTask = readJson(join(tmpDir, "plans", "auth", TASKS_FILENAME)).tasks[0];
+    expect(newTask.dependencies).toEqual(["FORGE-2.1"]);
+  });
 });
 
 describe("addDep / removeDep", () => {

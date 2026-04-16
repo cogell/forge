@@ -100,6 +100,7 @@ export async function createTask(
     design?: string;
     acceptance?: string[];
     notes?: string;
+    blockedBy?: string[];
   },
   cwd?: string
 ): Promise<string> {
@@ -107,6 +108,24 @@ export async function createTask(
   readProjectPrefix(root);
 
   const filePath = resolveTasksPath(feature, root);
+
+  // Validate blockedBy ids against all task ids across the project BEFORE
+  // acquiring the per-file lock. Batch-report every unknown id so callers
+  // see the full list. No write occurs on failure, so tasks.json is untouched.
+  if (opts.blockedBy && opts.blockedBy.length > 0) {
+    const allIds = new Set<string>();
+    for (const fp of discoverTaskFilesFromRoot(root)) {
+      const d = readTasksFile(fp);
+      if (d) for (const t of d.tasks) allIds.add(t.id);
+    }
+    const unknown = opts.blockedBy.filter((id) => !allIds.has(id));
+    if (unknown.length > 0) {
+      throw new Error(
+        `Unknown blocker task ID(s): ${unknown.join(", ")}. ` +
+          `Each --blocked-by value must reference an existing task.`
+      );
+    }
+  }
 
   return withLock(filePath, () => {
     const data = readTasksFile(filePath);
@@ -157,7 +176,7 @@ export async function createTask(
       design: opts.design ?? "",
       acceptance: opts.acceptance ?? [],
       notes: opts.notes ?? "",
-      dependencies: [],
+      dependencies: opts.blockedBy ? [...opts.blockedBy] : [],
       comments: [],
       closeReason: null,
     });
