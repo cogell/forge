@@ -1,0 +1,205 @@
+{
+  "version": 1,
+  "epics": [
+    {
+      "id": "FORGE-3",
+      "title": "Phase 1: CLI polish — six iteration-pass additions",
+      "created": "2026-04-16"
+    }
+  ],
+  "tasks": [
+    {
+      "id": "FORGE-3.1",
+      "title": "Land named constants + Phase 1 dispatcher tokens",
+      "status": "open",
+      "priority": 1,
+      "labels": [
+        "complexity:3",
+        "phase:1"
+      ],
+      "description": "Prerequisite for all other Phase 1 tasks. Adds three named constants and grows the subcommand dispatcher's RESERVED / VALUE_FLAGS / BOOLEAN_FLAGS arrays so each feature task (delete, --blocked-by, ready filter, show children, epic --id) has a stable base to wire handlers into. Handlers themselves are NOT wired by this task — that is each feature task's job. This split keeps Phase 1 feature tasks parallelizable once this lands.",
+      "design": "Export from src/lib/tasks/types.ts (alongside SCHEMA_VERSION):\n\n  export const GATE_LABEL_HUMAN = 'gate:human';\n  export const PHASE_LABEL_PREFIX = 'phase:';\n  export const COMMIT_PLAN_TEMPLATE = 'chore(<feature>): add Phase <N> plan + tasks';\n\nIn src/commands/tasks.ts:\n  - RESERVED (line 35) append: 'delete'.\n  - VALUE_FLAGS (line 43) append: '--blocked-by', '--phase', '--id'.\n  - BOOLEAN_FLAGS (line 50) append: '--confirm', '--children', '--full'.\n\nDo NOT add 'edit' (Phase 2), 'gate' (Phase 5), '--editor' (Phase 2), '--dry-run' (Phase 2) — those belong to their own phases' tasks. No handler dispatch logic wired here; that is per-feature task.",
+      "acceptance": [
+        "GATE_LABEL_HUMAN, PHASE_LABEL_PREFIX, COMMIT_PLAN_TEMPLATE exported from src/lib/tasks/types.ts as string constants",
+        "src/commands/tasks.ts RESERVED array contains 'delete'",
+        "src/commands/tasks.ts VALUE_FLAGS set contains '--blocked-by', '--phase', '--id'",
+        "src/commands/tasks.ts BOOLEAN_FLAGS set contains '--confirm', '--children', '--full'",
+        "Dispatcher does NOT yet contain 'edit', 'gate', '--editor', or '--dry-run' (those are Phase 2 / Phase 5)",
+        "pnpm typecheck passes",
+        "pnpm test passes (no new tests required for this scaffolding task; existing tests must still pass)"
+      ],
+      "notes": "Files: src/lib/tasks/types.ts (modify), src/commands/tasks.ts (modify). No test additions expected; existing tests must stay green.",
+      "dependencies": [],
+      "comments": [],
+      "closeReason": null
+    },
+    {
+      "id": "FORGE-3.2",
+      "title": "Implement forge tasks delete with descendant-scan",
+      "status": "open",
+      "priority": 2,
+      "labels": [
+        "complexity:5",
+        "phase:1"
+      ],
+      "description": "Add forge tasks delete <task-id> --confirm subcommand. Without --confirm, prints a preview and exits non-zero. With --confirm, removes the task atomically AND cleans up any dangling dependencies (other tasks that list the deleted task in their dependencies[] get it removed). Refuses if the task has any descendants (matched by ID prefix, same pattern as container detection in getReadyTasks).",
+      "design": "Add to src/lib/tasks/mutations.ts:\n\n  interface DeletePreview {\n    id: string;\n    title: string;\n    descendants: string[];   // IDs of tasks whose id starts with `${id}.`\n    dependents: string[];    // IDs of other tasks that list id in their dependencies[]\n  }\n\n  export function deleteTask(\n    id: string,\n    opts: { confirm: boolean },\n    cwd?: string,\n  ): DeletePreview | void;\n\nBehavior:\n  - Build DeletePreview by scanning all task files (same discovery path as getReadyTasks).\n  - Without opts.confirm: return the DeletePreview. The CLI handler prints a human-readable summary (title, id, 'would delete', list of descendants if any, list of dependents that would have this id cleaned from their dependencies[]) then exits non-zero. No write.\n  - With opts.confirm and descendants.length > 0: throw an error naming the descendants; CLI handler exits non-zero with that message. tasks.json MUST remain unmodified.\n  - With opts.confirm and descendants.length === 0: perform the delete atomically. Use the same read → mutate → write path as closeTask / updateTask (see withLock-like pattern inside mutations.ts). In the same write, strip id from every other task's dependencies[] (dangling-dep cleanup). Return void.\n  - Unknown id (not found in any task file): throw; CLI exits 1 with a clear message; tasks.json unmodified.\n\nHandler in src/commands/tasks.ts dispatches to deleteTask and formats the DeletePreview for the terminal. Uses --confirm BOOLEAN_FLAG landed by FORGE-3.1.",
+      "acceptance": [
+        "forge tasks delete FORGE-X.Y without --confirm prints a preview (task title + id + descendants count) and exits non-zero",
+        "forge tasks delete FORGE-X.Y --confirm on a task with no descendants removes it from tasks.json atomically",
+        "After deletion, any other task that previously listed FORGE-X.Y in its dependencies[] no longer does",
+        "forge tasks delete FORGE-X --confirm on a task with descendants (e.g. FORGE-X.1 exists) exits non-zero with a message naming the descendants; tasks.json is unmodified",
+        "forge tasks delete UNKNOWN-ID --confirm exits non-zero with a clear error; tasks.json is unmodified",
+        "Unit tests in src/lib/__tests__/tasks.test.ts cover: happy delete + dep cleanup, descendant refusal, unknown id, preview without --confirm",
+        "Integration tests in src/commands/__tests__/tasks.test.ts cover the subcommand wiring (stdout preview, exit codes)",
+        "pnpm typecheck passes; pnpm test passes"
+      ],
+      "notes": "Files: src/lib/tasks/mutations.ts (modify — add deleteTask), src/commands/tasks.ts (modify — add handler), src/lib/__tests__/tasks.test.ts (extend), src/commands/__tests__/tasks.test.ts (extend). Descendant pattern: see getReadyTasks container detection at src/lib/tasks/queries.ts:113-128.",
+      "dependencies": [
+        "FORGE-3.1"
+      ],
+      "comments": [],
+      "closeReason": null
+    },
+    {
+      "id": "FORGE-3.3",
+      "title": "Extend forge tasks create with --blocked-by flag",
+      "status": "open",
+      "priority": 2,
+      "labels": [
+        "complexity:4",
+        "phase:1"
+      ],
+      "description": "Add repeatable --blocked-by <id> flag to forge tasks create. Each value is pushed onto the new task's dependencies[] at creation time. Unknown blocker ID fails creation atomically — no partial writes to tasks.json. Existing invocations without --blocked-by must continue to work unchanged.",
+      "design": "In src/lib/tasks/mutations.ts, extend createTask to accept an optional blockedBy?: string[] field on its options object.\n\nBlocker-id validation: before writing, build a Set<string> of all existing task ids by running discoverTaskFiles (queries.ts) + readTasksFile over every file, collecting every task.id across all features (same discovery pattern getReadyTasks uses to build its statusMap — see queries.ts:96-111). For each id in blockedBy, require id ∈ allIds. If any id is missing, throw a single error that names every unknown id (batch the failures so the user sees them all at once). The exception path must leave tasks.json untouched on disk.\n\nWhen blockedBy is present and all ids resolve, set the new task's dependencies = [...blockedBy] before persisting. When blockedBy is absent or empty, dependencies = [] (unchanged from today).\n\nIn src/commands/tasks.ts: parse --blocked-by as a repeatable VALUE_FLAG (already in VALUE_FLAGS from FORGE-3.1). Collect all occurrences into a string[] and pass to createTask({ blockedBy }). Follow the exact repeatable-flag collection pattern already used for --acceptance (-a) and --label (-l) in the existing handler.",
+      "acceptance": [
+        "forge tasks create <feature> 'title' --blocked-by FORGE-X.Y --blocked-by FORGE-X.Z creates the task with both IDs in its dependencies[] array",
+        "forge tasks create <feature> 'title' --blocked-by UNKNOWN-ID exits non-zero with a message naming the unknown id; tasks.json is unmodified",
+        "Existing forge tasks create invocations without --blocked-by produce byte-identical tasks.json output (no dependencies[] change) as before",
+        "Single --blocked-by works (degenerate case of repeatable)",
+        "Unit tests in src/lib/__tests__/tasks.test.ts cover: multi-value happy path, single-value happy path, unknown id rejection, cross-feature blocker resolution",
+        "Integration tests in src/commands/__tests__/tasks.test.ts cover the flag parsing and end-to-end invocation",
+        "pnpm typecheck passes; pnpm test passes"
+      ],
+      "notes": "Files: src/lib/tasks/mutations.ts (modify — extend createTask signature and implementation), src/commands/tasks.ts (modify — collect repeated --blocked-by values and wire to createTask), src/lib/__tests__/tasks.test.ts (extend), src/commands/__tests__/tasks.test.ts (extend). The --blocked-by VALUE_FLAG entry is already present from FORGE-3.1.",
+      "dependencies": [
+        "FORGE-3.1"
+      ],
+      "comments": [],
+      "closeReason": null
+    },
+    {
+      "id": "FORGE-3.4",
+      "title": "Extend forge tasks ready with --label and --phase filters",
+      "status": "open",
+      "priority": 2,
+      "labels": [
+        "complexity:5",
+        "phase:1"
+      ],
+      "description": "Extend forge tasks ready with a repeatable --label <L> flag (AND semantics when passed multiple times) and a --phase <N> sugar flag that translates internally to --label ${PHASE_LABEL_PREFIX}${N}. Filters compose (--phase 5 --label needs-design returns tasks with BOTH labels). Existing forge tasks ready with no filter flags returns all ready tasks unchanged (backward compat).",
+      "design": "In src/lib/tasks/queries.ts, extend getReadyTasks signature to accept an optional filter: { labels?: string[] }. After the existing leaf/open/deps-satisfied filter (queries.ts:93-165), apply a label filter: for each label L in opts.labels, require L ∈ task.labels. Multiple labels AND together (all must be present).\n\nIn src/commands/tasks.ts ready handler:\n  - Collect all --label occurrences into a string[] (VALUE_FLAG already present per FORGE-3.1).\n  - If --phase N is also passed, append `${PHASE_LABEL_PREFIX}${N}` to the same list. Use the PHASE_LABEL_PREFIX constant from src/lib/tasks/types.ts (landed by FORGE-3.1) — do NOT hardcode 'phase:'.\n  - Pass { labels } to getReadyTasks.\n\nNo schema change. Phase remains a label convention.",
+      "acceptance": [
+        "forge tasks ready --label gate:human returns only tasks whose labels[] contains 'gate:human'",
+        "Two --label flags intersect: forge tasks ready --label frontend --label needs-design returns tasks with BOTH labels",
+        "forge tasks ready --phase 5 returns the exact same result as forge tasks ready --label phase:5",
+        "forge tasks ready --phase 5 --label needs-design returns tasks with both phase:5 and needs-design labels",
+        "forge tasks ready (no filter flags) returns all ready tasks — identical output to pre-task behavior",
+        "forge tasks ready --label no-matches returns an empty list (and empty JSON array with --json)",
+        "Phase handler references PHASE_LABEL_PREFIX from types.ts (no hardcoded 'phase:' string in tasks.ts)",
+        "Unit tests in src/lib/__tests__/tasks.test.ts cover: getReadyTasks with single label, multiple labels (AND), no matches, backward compat with no filter",
+        "Integration tests in src/commands/__tests__/tasks.test.ts cover --label / --phase / combined flag handling",
+        "pnpm typecheck passes; pnpm test passes"
+      ],
+      "notes": "Files: src/lib/tasks/queries.ts (modify — extend getReadyTasks), src/commands/tasks.ts (modify — ready handler), src/lib/__tests__/tasks.test.ts (extend), src/commands/__tests__/tasks.test.ts (extend). --label and --phase VALUE_FLAG entries are already present (--label pre-existing; --phase from FORGE-3.1).",
+      "dependencies": [
+        "FORGE-3.1"
+      ],
+      "comments": [],
+      "closeReason": null
+    },
+    {
+      "id": "FORGE-3.5",
+      "title": "Extend forge tasks show with --children and --full recursion",
+      "status": "open",
+      "priority": 2,
+      "labels": [
+        "complexity:5",
+        "phase:1"
+      ],
+      "description": "Extend forge tasks show <task-id> with two new booleans: --children (renders direct children in a nested summary block) and --full (when combined with --children, recurses through all descendants and renders every field — description, design, acceptance, notes — instead of the default summary). --full alone (without --children) preserves existing behavior for a single task. JSON output (--json --children --full) emits structured nested children arrays.",
+      "design": "Add helper in src/lib/tasks/queries.ts:\n\n  export function getDescendants(\n    parentId: string,\n    scope: 'direct' | 'all',\n    cwd?: string,\n  ): Task[];\n\nDirection: from parent DOWN (distinct from the existing container-detection at queries.ts:113-128, which walks leaves UP to mark ancestors). Implementation is the simple inverse: iterate all tasks and pick those whose id starts with `${parentId}.`.\n\n  - scope 'direct': filter further to children exactly one dot-level deeper. Example: parentId 'FORGE-3' → matches 'FORGE-3.1', 'FORGE-3.2' but NOT 'FORGE-3.1.1'. Check by counting dots in the suffix after `${parentId}.`.\n  - scope 'all': every descendant at any depth. No dot-count filter.\n\nReturns Task[] sorted by id ascending (stable output for tests).\n\nExtend the show handler (handleShow) in src/commands/tasks.ts:\n  - Default (no --children): existing behavior unchanged.\n  - --children (summary): call getDescendants(id, 'direct'). Render parent, then an indented summary block for each child (id + title + status). If the result is empty, emit a single literal line '  (no children)'.\n  - --children --full: call getDescendants(id, 'all'). Render the parent and every descendant, each with full fields (description, design, acceptance, notes). Preserve existing --full field rendering for the parent. Sort by id so nested ordering is deterministic.\n  - --json variants: emit structured { task, children: [...] } with each child optionally having its own children array. For --children --full, nest recursively.\n\n--children and --full are BOOLEAN_FLAGS already landed by FORGE-3.1.",
+      "acceptance": [
+        "forge tasks show FORGE-X --children renders the parent task followed by its direct children in an indented summary block (id + title + status per child)",
+        "forge tasks show FORGE-X --children --full renders the parent and all descendants recursively, each with full fields (description, design, acceptance, notes)",
+        "forge tasks show FORGE-X --full (without --children) behaves identically to existing --full (no regression on the parent-only view)",
+        "forge tasks show FORGE-X --children on a task with no children renders the parent followed by an empty-children indicator (e.g. '  (no children)')",
+        "forge tasks show FORGE-X --json --children --full emits nested JSON: { task, children: [{ task, children: [...] }] }",
+        "forge tasks show UNKNOWN-ID --children exits non-zero with an unknown-id message",
+        "Unit tests in src/lib/__tests__/tasks.test.ts cover getDescendants with direct vs all scopes, including empty-children case",
+        "Integration tests in src/commands/__tests__/tasks.test.ts cover --children, --children --full, JSON output shape, and empty-children rendering",
+        "pnpm typecheck passes; pnpm test passes"
+      ],
+      "notes": "Files: src/lib/tasks/queries.ts (modify — add getDescendants), src/commands/tasks.ts (modify — show handler), src/lib/__tests__/tasks.test.ts (extend), src/commands/__tests__/tasks.test.ts (extend). --children / --full BOOLEAN_FLAG entries are already present from FORGE-3.1.",
+      "dependencies": [
+        "FORGE-3.1"
+      ],
+      "comments": [],
+      "closeReason": null
+    },
+    {
+      "id": "FORGE-3.6",
+      "title": "Extend forge tasks epic create with --id flag",
+      "status": "open",
+      "priority": 2,
+      "labels": [
+        "complexity:4",
+        "phase:1"
+      ],
+      "description": "Extend forge tasks epic create to accept --id <explicit-id>. With --id, the epic is created with the specified ID; the duplicate-ID check runs inside the existing .epic-lock critical section (NOT by lock contention — by an existence scan performed while the lock is held). Without --id, current auto-increment behavior is unchanged. Malformed IDs (wrong prefix, non-numeric suffix) rejected before any lock is acquired.",
+      "design": "In src/lib/tasks/mutations.ts, extend the current createEpic by adding an options-object as a 4th optional parameter. The signature change is deliberately back-compatible so existing callsites don't churn.\n\n  // Current (pre-task):\n  export async function createEpic(\n    feature: string | null,\n    title: string,\n    cwd?: string,\n  ): Promise<string>;\n\n  // Post-task (locked-in shape):\n  export async function createEpic(\n    feature: string | null,\n    title: string,\n    cwd?: string,\n    opts?: { explicitId?: string },\n  ): Promise<string>;\n\nWhy this shape: audited callsites — one production call at src/commands/tasks.ts:430 passing 3 args, five test callsites in src/lib/__tests__/tasks.test.ts passing 3 args (one passes 2). Adding opts as a 4th optional positional means ZERO callsite changes — TypeScript allows omitting trailing optionals. Do NOT refactor call sites to pass opts:{} as a placeholder; leave them alone.\n\nValidation order:\n  1. Pre-lock shape validation: if opts?.explicitId is present, require it to match `${projectPrefix}-${number}` (via readProjectPrefix()). On mismatch, throw before acquiring .epic-lock. Message: 'invalid epic id <value>: expected <PREFIX>-<number>'.\n  2. Acquire .epic-lock (existing flow at src/lib/tasks/mutations.ts:36-86).\n  3. INSIDE the lock critical section: the current code already walks every tasks.json under plans/ to compute maxN (see lines 51-65). Extend this walk so that when opts?.explicitId is present, we additionally check: for every existing epic across every feature, if its id === opts.explicitId, throw with a message naming the CONFLICTING feature (derived from the file path — the directory name under plans/) and the epic's title. tasks.json must stay unmodified on the throw path.\n     → Important: carry the feature name through this scan (current scan may only yield epic objects; extend it to also return the owning file path so the handler can produce the conflict message).\n  4. If no collision, use opts.explicitId as the new epic id. Otherwise fall through to the existing auto-increment path (maxN + 1).\n\nHandler in src/commands/tasks.ts parses --id <val> (VALUE_FLAG landed by FORGE-3.1) and calls createEpic(feature, title, cwd, { explicitId: val }). Without --id, the handler calls createEpic(feature, title, cwd) — existing call shape — and existing auto-increment behavior runs unchanged.",
+      "acceptance": [
+        "forge tasks epic create <feature> --id FORGE-9 'title' creates an epic with id exactly 'FORGE-9'",
+        "A second forge tasks epic create anywhere in the project using --id FORGE-9 is rejected by the duplicate-ID existence scan inside .epic-lock; error message names the conflicting epic (feature + title); tasks.json is unmodified",
+        "forge tasks epic create <feature> --id BADFORMAT 'title' rejected with a shape-validation error BEFORE the lock is acquired; tasks.json is unmodified",
+        "forge tasks epic create <feature> 'title' (no --id) uses existing auto-increment behavior unchanged",
+        "Unit tests in src/lib/__tests__/tasks.test.ts cover: happy explicit-id path, duplicate-detection-under-lock path, malformed-id rejection, backward-compat auto-increment path",
+        "Integration tests in src/commands/__tests__/tasks.test.ts cover the --id flag wiring and error messages",
+        "pnpm typecheck passes; pnpm test passes"
+      ],
+      "notes": "Files: src/lib/tasks/mutations.ts (modify — extend createEpic), src/commands/tasks.ts (modify — epic create handler), src/lib/__tests__/tasks.test.ts (extend), src/commands/__tests__/tasks.test.ts (extend). --id VALUE_FLAG already present from FORGE-3.1. Existing .epic-lock logic lives at src/lib/tasks/mutations.ts:36-86.",
+      "dependencies": [
+        "FORGE-3.1"
+      ],
+      "comments": [],
+      "closeReason": null
+    },
+    {
+      "id": "FORGE-3.7",
+      "title": "Add --replace flag to forge tasks update --acceptance",
+      "status": "open",
+      "priority": 2,
+      "labels": [
+        "complexity:3",
+        "phase:1"
+      ],
+      "description": "Add a --replace boolean flag to forge tasks update. When present with --acceptance (-a), the provided acceptance values replace the task's acceptance[] array instead of appending to it. Default behavior (without --replace) stays append — backward compatible with every existing invocation. This closes reviewer issue #3 (append-only --acceptance) independent of Phase 2's editor-mode, providing a cheap fallback if Phase 2 slips.",
+      "design": "In src/lib/tasks/mutations.ts, extend the existing updateTask options to accept a replaceAcceptance?: boolean field. When replaceAcceptance === true AND the incoming acceptance value is present, overwrite task.acceptance with the new array. When false/absent, preserve current append behavior.\n\nIn src/commands/tasks.ts:\n  - Add --replace to BOOLEAN_FLAGS set (net-new Phase 1 token; FORGE-3.1 did NOT add this).\n  - In the update handler: if --replace is set, pass replaceAcceptance: true to updateTask.\n  - --replace paired with --acceptance triggers replacement. --replace without --acceptance is a no-op (explicit note in --help; exit 0, no write).\n  - Do NOT generalize --replace to other repeatable fields (--label, etc.) in this task. Scoped to --acceptance only; further fields are out of scope for V1.\n\nNote: this task is the ONE exception to the FORGE-3.1 rule that 'dispatcher tokens all land in 3.1' — --replace wasn't foreseen at 3.1's decomposition, and it's small enough to land in the same task as its handler wiring. Call this out in the PR description for clarity.",
+      "acceptance": [
+        "forge tasks update FORGE-X.Y --acceptance 'first' --acceptance 'second' --replace sets task.acceptance to exactly ['first', 'second'], regardless of prior contents",
+        "forge tasks update FORGE-X.Y --acceptance 'added' (no --replace) preserves existing append behavior — every existing invocation produces byte-identical results to pre-task",
+        "forge tasks update FORGE-X.Y --replace (no --acceptance) is a no-op — exit 0, no write, no error",
+        "BOOLEAN_FLAGS in src/commands/tasks.ts contains --replace",
+        "Unit tests in src/lib/__tests__/tasks.test.ts cover: replace happy path (pre-existing acceptance overwritten), append backward-compat (no --replace), --replace without --acceptance no-op",
+        "Integration tests in src/commands/__tests__/tasks.test.ts cover the flag parsing and end-to-end invocation",
+        "pnpm typecheck passes; pnpm test passes"
+      ],
+      "notes": "Files: src/lib/tasks/mutations.ts (modify — extend updateTask options), src/commands/tasks.ts (modify — add --replace to BOOLEAN_FLAGS and wire in update handler), src/lib/__tests__/tasks.test.ts (extend), src/commands/__tests__/tasks.test.ts (extend). This task closes reviewer issue #3 independent of Phase 2. If Phase 2 ships first, --replace still remains a useful scripting path for agents that prefer one-shot flag invocations over editor-mode.",
+      "dependencies": [
+        "FORGE-3.1"
+      ],
+      "comments": [],
+      "closeReason": null
+    }
+  ]
+}
