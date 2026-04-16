@@ -1030,4 +1030,121 @@ describe("forge tasks CLI", () => {
     const logs = logSpy.mock.calls.map((c: string[]) => c[0]).join("\n");
     expect(logs).toContain("No ready tasks");
   });
+
+  // ── show --children / --full recursion (FORGE-3.5) ─────────────
+
+  function childrenFixture(): TasksFile {
+    return {
+      version: 1,
+      epics: [{ id: "TEST-1", title: "Phase 1", created: "2026-03-30" }],
+      tasks: [
+        { id: "TEST-1.1", title: "Parent container", status: "open", priority: 2, labels: [], description: "parent desc", design: "parent design", acceptance: ["parent ac"], notes: "parent notes", dependencies: [], comments: [], closeReason: null },
+        { id: "TEST-1.1.1", title: "Child A", status: "open", priority: 2, labels: [], description: "childA desc", design: "childA design", acceptance: ["childA ac"], notes: "childA notes", dependencies: [], comments: [], closeReason: null },
+        { id: "TEST-1.1.2", title: "Child B", status: "closed", priority: 2, labels: [], description: "childB desc", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: "done" },
+        { id: "TEST-1.1.1.1", title: "Grandchild", status: "open", priority: 2, labels: [], description: "gc desc", design: "gc design", acceptance: [], notes: "gc notes", dependencies: [], comments: [], closeReason: null },
+        { id: "TEST-1.2", title: "Leaf sibling", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: null },
+      ],
+    };
+  }
+
+  it("show --children renders direct children summary (id + title + status)", async () => {
+    setupFeature(tmp, "auth", childrenFixture());
+    await tasks(["show", "TEST-1.1", "--children"]);
+
+    const logs = logSpy.mock.calls.map((c: string[]) => c[0]).join("\n");
+    // Parent still rendered
+    expect(logs).toContain("TEST-1.1");
+    expect(logs).toContain("Parent container");
+    // Direct children shown
+    expect(logs).toContain("TEST-1.1.1");
+    expect(logs).toContain("Child A");
+    expect(logs).toContain("TEST-1.1.2");
+    expect(logs).toContain("Child B");
+    expect(logs).toContain("closed");
+    // Grandchild NOT included in direct children summary
+    expect(logs).not.toContain("TEST-1.1.1.1");
+  });
+
+  it("show --children on a task with no children prints exact '  (no children)' literal", async () => {
+    setupFeature(tmp, "auth", childrenFixture());
+    await tasks(["show", "TEST-1.2", "--children"]);
+
+    const logCalls = logSpy.mock.calls.map((c: string[]) => c[0]);
+    expect(logCalls).toContain("  (no children)");
+  });
+
+  it("show --children --full recurses through all descendants and renders full fields", async () => {
+    setupFeature(tmp, "auth", childrenFixture());
+    await tasks(["show", "TEST-1.1", "--children", "--full"]);
+
+    const logs = logSpy.mock.calls.map((c: string[]) => c[0]).join("\n");
+    // Parent + all descendants present
+    expect(logs).toContain("TEST-1.1");
+    expect(logs).toContain("TEST-1.1.1");
+    expect(logs).toContain("TEST-1.1.2");
+    expect(logs).toContain("TEST-1.1.1.1");
+    // Full fields for descendants (descriptions, design, notes, acceptance)
+    expect(logs).toContain("childA desc");
+    expect(logs).toContain("childA design");
+    expect(logs).toContain("childA notes");
+    expect(logs).toContain("childA ac");
+    expect(logs).toContain("gc desc");
+    expect(logs).toContain("gc design");
+    expect(logs).toContain("gc notes");
+  });
+
+  it("show --full (without --children) preserves existing single-task full behavior", async () => {
+    setupFeature(tmp, "auth", childrenFixture());
+    await tasks(["show", "TEST-1.1", "--full"]);
+
+    const logs = logSpy.mock.calls.map((c: string[]) => c[0]).join("\n");
+    expect(logs).toContain("TEST-1.1");
+    expect(logs).toContain("parent desc");
+    // Children should NOT render without --children
+    expect(logs).not.toContain("Child A");
+    expect(logs).not.toContain("Child B");
+  });
+
+  it("show --json --children --full emits nested children arrays", async () => {
+    setupFeature(tmp, "auth", childrenFixture());
+    await tasks(["show", "TEST-1.1", "--json", "--children", "--full"]);
+
+    const output = logSpy.mock.calls[0][0];
+    const parsed = JSON.parse(output);
+    expect(parsed.task).toBeDefined();
+    expect(parsed.task.id).toBe("TEST-1.1");
+    expect(Array.isArray(parsed.children)).toBe(true);
+    expect(parsed.children).toHaveLength(2);
+    const childAEntry = parsed.children.find((c: any) => c.task.id === "TEST-1.1.1");
+    expect(childAEntry).toBeDefined();
+    expect(Array.isArray(childAEntry.children)).toBe(true);
+    expect(childAEntry.children).toHaveLength(1);
+    expect(childAEntry.children[0].task.id).toBe("TEST-1.1.1.1");
+    // Child B has no children
+    const childBEntry = parsed.children.find((c: any) => c.task.id === "TEST-1.1.2");
+    expect(childBEntry.children).toEqual([]);
+  });
+
+  it("show --json --children (not --full) emits flat children list under parent", async () => {
+    setupFeature(tmp, "auth", childrenFixture());
+    await tasks(["show", "TEST-1.1", "--json", "--children"]);
+
+    const output = logSpy.mock.calls[0][0];
+    const parsed = JSON.parse(output);
+    expect(parsed.task.id).toBe("TEST-1.1");
+    expect(Array.isArray(parsed.children)).toBe(true);
+    expect(parsed.children).toHaveLength(2);
+    // Direct children only — grandchild not nested (no --full)
+    const ids = parsed.children.map((c: any) => c.task.id).sort();
+    expect(ids).toEqual(["TEST-1.1.1", "TEST-1.1.2"]);
+  });
+
+  it("show --children with UNKNOWN-ID exits non-zero", async () => {
+    setupFeature(tmp, "auth", childrenFixture());
+    try {
+      await tasks(["show", "TEST-999", "--children"]);
+    } catch {}
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    expect(errorSpy.mock.calls.some((c: string[]) => c[0]?.includes("not found"))).toBe(true);
+  });
 });

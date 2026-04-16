@@ -32,7 +32,7 @@ export { readProjectPrefix, isValidPrefix } from "./config";
 export { resolveTasksPath, discoverTaskFiles, readTasksFile } from "./io";
 
 // Queries
-export { queryFeatureTasks, getReadyTasks } from "./queries";
+export { queryFeatureTasks, getReadyTasks, getDescendants } from "./queries";
 
 // Mutations
 export {
