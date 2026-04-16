@@ -25,6 +25,11 @@ import {
   getReadyTasks,
   getDescendants,
   resolveTasksPath,
+  renderBuffer,
+  parseBuffer,
+  hashTask,
+  runEditor,
+  assertInteractive,
   SCHEMA_VERSION,
   TASKS_FILENAME,
   PHASE_LABEL_PREFIX,
@@ -38,6 +43,7 @@ import {
 const RESERVED = [
   "ready", "list", "show", "create", "close", "update",
   "comment", "label", "dep", "validate", "epic", "delete",
+  "edit",
 ];
 
 const VALID_STATUSES: TaskStatus[] = ["open", "in_progress", "closed"];
@@ -48,12 +54,14 @@ const VALUE_FLAGS = new Set([
   "-d", "--description", "--design", "--notes",
   "--status", "--title", "--reason",
   "--blocked-by", "--phase", "--id",
+  "--editor",
 ]);
 
 /** Boolean flags that don't consume a value. */
 const BOOLEAN_FLAGS = new Set([
   "--json", "--project", "--force", "--help", "-h",
   "--confirm", "--children", "--full", "--replace",
+  "--dry-run",
 ]);
 
 const TASKS_HELP = `
@@ -219,6 +227,28 @@ Notes:
     dependencies[] across all feature files.
 `.trim(),
 
+  edit: `
+forge tasks edit — open a task in your editor
+
+Usage: forge tasks edit <task-id> [options]
+
+Arguments:
+  task-id         The task to edit (looked up across all features)
+
+Options:
+  --editor <cmd>  Editor command to use (overrides $VISUAL/$EDITOR/'vi')
+  --dry-run       Show field-by-field diff; do not write tasks.json
+  --force         Reserved for conflict override (see FORGE-4.4); no-op here
+  --json          Output as JSON
+  --help, -h      Show this help
+
+Notes:
+  - Requires an interactive terminal; fails fast in CI / non-TTY contexts.
+  - Unchanged buffer: exits 0 without writing.
+  - Empty buffer: exits 0 without writing (does NOT delete the task).
+  - Only child tasks are editable; use 'forge tasks update' for epic fields.
+`.trim(),
+
   close: `
 forge tasks close — close a task
 
@@ -381,6 +411,7 @@ async function tasksInner(args: string[], json: boolean, project: boolean): Prom
       case "show": return handleShow(positional, args, json, cwd);
       case "ready": return handleReady(args, positional, json, cwd);
       case "delete": return handleDelete(positional, args, json, cwd);
+      case "edit": return handleEdit(args, positional, cwd);
       default:
         fail(`Subcommand "${subcommand}" is not yet implemented.`);
     }
@@ -1031,6 +1062,189 @@ async function handleDelete(
     else console.log(`Deleted task ${id}`);
   } catch (err) {
     fail((err as Error).message);
+  }
+}
+
+// ── Edit handler (FORGE-4.3) ────────────────────────────
+
+/**
+ * `forge tasks edit <task-id>` — render the task as a markdown buffer, spawn
+ * the user's editor, parse the result, and apply the edits via updateTask.
+ *
+ * This handler is the "happy path" implementation. Robustness features
+ * (crontab-style re-open, optimistic lock, active --force) extend this
+ * handler in FORGE-4.4; the hooks are marked inline.
+ */
+async function handleEdit(args: string[], positional: string[], cwd: string): Promise<void> {
+  // 1. TTY/CI guard — fail fast before any editor spawn.
+  try {
+    assertInteractive();
+  } catch (err) {
+    fail((err as Error).message);
+  }
+
+  // 2. Parse flags. --dry-run / --force are boolean; --editor takes a value.
+  const dryRun = args.includes("--dry-run");
+  // --force is parsed now so 4.4 just reads the already-parsed value.
+  // Reference it via `void` so it doesn't trip unused-binding lint.
+  const force = args.includes("--force");
+  void force;
+
+  let editorOverride: string | undefined;
+  const editorIdx = args.indexOf("--editor");
+  if (editorIdx !== -1 && editorIdx + 1 < args.length) {
+    editorOverride = args[editorIdx + 1];
+  }
+
+  const taskId = positional[1];
+  if (!taskId) fail("Usage: forge tasks edit <task-id> [--editor <cmd>] [--dry-run]");
+
+  // 3. Look up task across feature files (mirrors handleShow / handleUpdate).
+  const files = discoverTaskFiles(cwd);
+  let found: { task: Task } | null = null;
+  let isEpicMatch = false;
+
+  for (const filePath of files) {
+    const data = readTasksFile(filePath);
+    if (!data) continue;
+    if (data.epics.some((e) => e.id === taskId)) {
+      isEpicMatch = true;
+      break;
+    }
+    const task = data.tasks.find((t) => t.id === taskId);
+    if (task) {
+      found = { task };
+      break;
+    }
+  }
+
+  if (isEpicMatch) {
+    fail("cannot edit epics; edit their child tasks, or use forge tasks update <epic-id> for individual fields");
+  }
+  if (!found) {
+    fail(`Task "${taskId}" not found. Usage: forge tasks edit <task-id>`);
+  }
+
+  const task = found.task;
+
+  // 4. HOOK for FORGE-4.4: pre-edit hash for optimistic lock detection.
+  const openHash = hashTask(task);
+  void openHash;
+
+  // 5. Render the editable buffer.
+  const initialBuffer = renderBuffer(task);
+
+  // 6. Spawn the editor.
+  let editedContent: string;
+  try {
+    editedContent = runEditor(
+      initialBuffer,
+      editorOverride !== undefined ? { editorOverride } : undefined,
+    );
+  } catch (err) {
+    fail((err as Error).message);
+  }
+
+  // 7. Empty buffer: exit 0 with a message; no write, no delete.
+  if (editedContent.trim() === "") {
+    console.error("edit aborted (empty buffer)");
+    return;
+  }
+
+  // 8. Unchanged buffer (strict byte equality): exit 0 without writing.
+  if (editedContent === initialBuffer) {
+    console.error("edit aborted (no changes)");
+    return;
+  }
+
+  // 9. Parse the edited buffer. (FORGE-4.4 will add crontab-style retry here.)
+  let parseResult;
+  try {
+    parseResult = parseBuffer(editedContent);
+  } catch (err) {
+    fail((err as Error).message);
+  }
+
+  // 10. Emit any warnings the parser surfaced.
+  for (const w of parseResult.warnings) {
+    console.error(`warning: ${w}`);
+  }
+
+  // 11. HOOK for FORGE-4.4: optimistic-lock check goes here.
+
+  const parsed = parseResult.task;
+
+  // 13. --dry-run: print field-by-field diff of changes; do not write.
+  if (dryRun) {
+    printEditDiff(task, parsed);
+    return;
+  }
+
+  // 14. Write via updateTask (honors the replaceAcceptance:[] patch).
+  try {
+    await updateTask(
+      taskId,
+      {
+        title: parsed.title,
+        priority: parsed.priority,
+        labels: parsed.labels,
+        dependencies: parsed.dependencies,
+        description: parsed.description,
+        design: parsed.design,
+        notes: parsed.notes,
+        addAcceptance: parsed.acceptance,
+        replaceAcceptance: true,
+      },
+      cwd,
+    );
+  } catch (err) {
+    fail((err as Error).message);
+  }
+
+  console.log(`Updated ${taskId}`);
+}
+
+interface ParsedForDiff {
+  title: string;
+  priority: number;
+  labels: string[];
+  dependencies: string[];
+  description: string;
+  design: string;
+  acceptance: string[];
+  notes: string;
+}
+
+/**
+ * Print a field-by-field `FIELD: <before> -> <after>` diff for every
+ * editable field whose value changed. Used by --dry-run.
+ */
+function printEditDiff(before: Task, after: ParsedForDiff): void {
+  const fmt = (v: unknown): string => {
+    if (Array.isArray(v)) return JSON.stringify(v);
+    if (v === "") return '""';
+    return String(v);
+  };
+  const checks: Array<[string, unknown, unknown]> = [
+    ["title", before.title, after.title],
+    ["priority", before.priority, after.priority],
+    ["labels", before.labels, after.labels],
+    ["dependencies", before.dependencies, after.dependencies],
+    ["description", before.description, after.description],
+    ["design", before.design, after.design],
+    ["acceptance", before.acceptance, after.acceptance],
+    ["notes", before.notes, after.notes],
+  ];
+  let changed = 0;
+  for (const [name, b, a] of checks) {
+    const bs = fmt(b);
+    const as = fmt(a);
+    if (bs === as) continue;
+    console.log(`${name}: ${bs} -> ${as}`);
+    changed++;
+  }
+  if (changed === 0) {
+    console.log("(no changes)");
   }
 }
 

@@ -1246,4 +1246,248 @@ describe("forge tasks CLI", () => {
     expect(exitSpy).toHaveBeenCalledWith(1);
     expect(errorSpy.mock.calls.some((c: string[]) => c[0]?.includes("not found"))).toBe(true);
   });
+
+  // ── forge tasks edit (FORGE-4.3) ─────────────────────────
+
+  describe("edit subcommand", () => {
+    // An editor mock that's a no-op (writes the initial buffer back unchanged).
+    const NOOP_EDITOR = `${process.execPath} -e "0"`;
+
+    // An editor mock that replaces the buffer with an empty string.
+    const EMPTY_EDITOR = `${process.execPath} -e "require('fs').writeFileSync(process.argv[1],'')"`;
+
+    /**
+     * Build an editor command that loads the seeded buffer, runs a transformer
+     * function on it, and writes the result back.
+     *
+     * We write the transformer source to a temp .js file and invoke it via
+     * `node <script> <buffer-path>`, which avoids any shell-quoting headaches
+     * that arise from inlining the transformer in `node -e "..."`.
+     */
+    function transformEditor(transformerSrc: string): string {
+      const scriptPath = join(tmp, `.edit-transform-${Math.random().toString(36).slice(2)}.js`);
+      const script =
+        `const f=require('fs');\n` +
+        `const p=process.argv[2];\n` +
+        `const input=f.readFileSync(p,'utf8');\n` +
+        `const transform=${transformerSrc};\n` +
+        `f.writeFileSync(p, transform(input));\n`;
+      writeFileSync(scriptPath, script);
+      return `${process.execPath} ${scriptPath}`;
+    }
+
+    // An editor that should NEVER run — if it does, it exits 99 so we can
+    // catch the "guard was bypassed" failure mode.
+    const FORBIDDEN_EDITOR = `${process.execPath} -e "process.exit(99)"`;
+
+    let savedIsTTY: boolean | undefined;
+    let savedCI: string | undefined;
+
+    beforeEach(() => {
+      savedIsTTY = process.stdout.isTTY;
+      savedCI = process.env.CI;
+      // Default all edit tests to "interactive"; individual guard tests override.
+      process.stdout.isTTY = true;
+      delete process.env.CI;
+    });
+
+    afterEach(() => {
+      process.stdout.isTTY = savedIsTTY as boolean;
+      if (savedCI === undefined) delete process.env.CI;
+      else process.env.CI = savedCI;
+    });
+
+    function editFixture(): TasksFile {
+      return {
+        version: 1,
+        epics: [{ id: "TEST-1", title: "Phase 1", created: "2026-03-30" }],
+        tasks: [
+          {
+            id: "TEST-1.1",
+            title: "Original title",
+            status: "open",
+            priority: 2,
+            labels: ["foo"],
+            description: "desc",
+            design: "design",
+            acceptance: ["ac-1", "ac-2"],
+            notes: "notes",
+            dependencies: [],
+            comments: [],
+            closeReason: null,
+          },
+        ],
+      };
+    }
+
+    it("happy path: editing the title in the buffer updates tasks.json and preserves other fields", async () => {
+      setupFeature(tmp, "auth", editFixture());
+      const filePath = join(tmp, "plans", "auth", TASKS_FILENAME);
+
+      // Replace the title in frontmatter with a new one.
+      const editor = transformEditor(
+        `(s) => s.replace('title: "Original title"', 'title: "New title"')`,
+      );
+
+      await tasks(["edit", "TEST-1.1", "--editor", editor]);
+
+      const data = readJson(filePath);
+      const task = data.tasks[0];
+      expect(task.title).toBe("New title");
+      expect(task.priority).toBe(2);
+      expect(task.labels).toEqual(["foo"]);
+      expect(task.description).toBe("desc");
+      expect(task.design).toBe("design");
+      expect(task.acceptance).toEqual(["ac-1", "ac-2"]);
+      expect(task.notes).toBe("notes");
+      expect(task.dependencies).toEqual([]);
+    });
+
+    it("unchanged buffer: save without changes leaves tasks.json byte-identical", async () => {
+      setupFeature(tmp, "auth", editFixture());
+      const filePath = join(tmp, "plans", "auth", TASKS_FILENAME);
+      const before = readFileSync(filePath, "utf-8");
+
+      await tasks(["edit", "TEST-1.1", "--editor", NOOP_EDITOR]);
+
+      const after = readFileSync(filePath, "utf-8");
+      expect(after).toBe(before);
+      expect(
+        errorSpy.mock.calls.some((c: string[]) => c[0]?.includes("no changes")),
+      ).toBe(true);
+    });
+
+    it("empty buffer: editor empties the file → exit 0, no write, no delete", async () => {
+      setupFeature(tmp, "auth", editFixture());
+      const filePath = join(tmp, "plans", "auth", TASKS_FILENAME);
+      const before = readFileSync(filePath, "utf-8");
+
+      await tasks(["edit", "TEST-1.1", "--editor", EMPTY_EDITOR]);
+
+      const after = readFileSync(filePath, "utf-8");
+      expect(after).toBe(before);
+      expect(
+        errorSpy.mock.calls.some((c: string[]) => c[0]?.includes("empty buffer")),
+      ).toBe(true);
+      // Task must still be present — confirms no delete ran.
+      const data = JSON.parse(after);
+      expect(data.tasks).toHaveLength(1);
+      expect(data.tasks[0].id).toBe("TEST-1.1");
+    });
+
+    it("clear acceptance: removing all '- [ ]' items sets acceptance to []", async () => {
+      setupFeature(tmp, "auth", editFixture());
+      const filePath = join(tmp, "plans", "auth", TASKS_FILENAME);
+
+      // Remove every `- [ ]` line from the buffer.
+      const editor = transformEditor(
+        `(s) => s.split('\\n').filter(l => !/^- \\[ \\]/.test(l)).join('\\n')`,
+      );
+
+      await tasks(["edit", "TEST-1.1", "--editor", editor]);
+
+      const task = readJson(filePath).tasks[0];
+      expect(task.acceptance).toEqual([]);
+    });
+
+    it("unknown task id exits 1 with a clear message", async () => {
+      setupFeature(tmp, "auth", editFixture());
+      try {
+        await tasks(["edit", "TEST-999", "--editor", FORBIDDEN_EDITOR]);
+      } catch {
+        /* exit spy throws */
+      }
+      expect(exitSpy).toHaveBeenCalledWith(1);
+      expect(
+        errorSpy.mock.calls.some((c: string[]) => c[0]?.toLowerCase().includes("not found")),
+      ).toBe(true);
+    });
+
+    it("editing an epic id exits 1 with 'cannot edit epics' message", async () => {
+      setupFeature(tmp, "auth", editFixture());
+      try {
+        await tasks(["edit", "TEST-1", "--editor", FORBIDDEN_EDITOR]);
+      } catch {
+        /* exit spy throws */
+      }
+      expect(exitSpy).toHaveBeenCalledWith(1);
+      expect(
+        errorSpy.mock.calls.some((c: string[]) => c[0]?.includes("cannot edit epics")),
+      ).toBe(true);
+    });
+
+    it("unknown frontmatter key exits 1 with parse error naming the key", async () => {
+      setupFeature(tmp, "auth", editFixture());
+      // Inject `bogus: true` into the YAML frontmatter.
+      const editor = transformEditor(
+        `(s) => s.replace('labels:', 'bogus: true\\nlabels:')`,
+      );
+
+      try {
+        await tasks(["edit", "TEST-1.1", "--editor", editor]);
+      } catch {
+        /* exit spy throws */
+      }
+      expect(exitSpy).toHaveBeenCalledWith(1);
+      expect(
+        errorSpy.mock.calls.some((c: string[]) => c[0]?.includes("bogus")),
+      ).toBe(true);
+    });
+
+    it("--dry-run: modifies buffer but leaves tasks.json byte-identical; prints diff", async () => {
+      setupFeature(tmp, "auth", editFixture());
+      const filePath = join(tmp, "plans", "auth", TASKS_FILENAME);
+      const before = readFileSync(filePath, "utf-8");
+
+      const editor = transformEditor(
+        `(s) => s.replace('title: "Original title"', 'title: "New title"')`,
+      );
+
+      await tasks(["edit", "TEST-1.1", "--editor", editor, "--dry-run"]);
+
+      const after = readFileSync(filePath, "utf-8");
+      expect(after).toBe(before);
+      // Diff printed to stdout — we expect the FIELD line mentioning title and both values.
+      const logs = logSpy.mock.calls.map((c: string[]) => c[0] ?? "").join("\n");
+      expect(logs.toLowerCase()).toContain("title");
+      expect(logs).toContain("Original title");
+      expect(logs).toContain("New title");
+    });
+
+    it("no-TTY guard: isTTY=false fails before spawning the editor", async () => {
+      setupFeature(tmp, "auth", editFixture());
+      process.stdout.isTTY = false;
+
+      try {
+        await tasks(["edit", "TEST-1.1", "--editor", FORBIDDEN_EDITOR]);
+      } catch {
+        /* exit spy throws */
+      }
+      // Must have exited with 1 and NOT with 99 (99 = FORBIDDEN_EDITOR ran).
+      expect(exitSpy).toHaveBeenCalledWith(1);
+      expect(exitSpy).not.toHaveBeenCalledWith(99);
+    });
+
+    it("CI=true guard: fails before spawning the editor", async () => {
+      setupFeature(tmp, "auth", editFixture());
+      process.stdout.isTTY = true;
+      process.env.CI = "true";
+
+      try {
+        await tasks(["edit", "TEST-1.1", "--editor", FORBIDDEN_EDITOR]);
+      } catch {
+        /* exit spy throws */
+      }
+      expect(exitSpy).toHaveBeenCalledWith(1);
+      expect(exitSpy).not.toHaveBeenCalledWith(99);
+    });
+
+    it("--help mentions --editor, --dry-run, --force", async () => {
+      await tasks(["edit", "--help"]);
+      const helpText = logSpy.mock.calls.map((c: string[]) => c[0]).join("\n");
+      expect(helpText).toContain("--editor");
+      expect(helpText).toContain("--dry-run");
+      expect(helpText).toContain("--force");
+    });
+  });
 });
