@@ -7,3 +7,4 @@ bin/forge
 # Temporary files
 tmp/
 .claude/
+spikes/
