@@ -131,7 +131,7 @@ describe("parseBuffer", () => {
   it("round-trips editable fields for a populated task", () => {
     const task = makeTask({
       title: "Round trip",
-      priority: 7,
+      priority: 4,
       labels: ["phase:2", "gate:human"],
       dependencies: ["FORGE-1", "FORGE-2"],
       description: "Some desc.",
@@ -143,7 +143,7 @@ describe("parseBuffer", () => {
     const { task: parsed, warnings } = parseBuffer(text);
 
     expect(parsed.title).toBe("Round trip");
-    expect(parsed.priority).toBe(7);
+    expect(parsed.priority).toBe(4);
     expect(parsed.labels).toEqual(["phase:2", "gate:human"]);
     expect(parsed.dependencies).toEqual(["FORGE-1", "FORGE-2"]);
     expect(parsed.description).toBe("Some desc.");
@@ -281,6 +281,79 @@ describe("parseBuffer", () => {
     expect(task.design).toBe("");
     expect(task.acceptance).toEqual([]);
     expect(task.notes).toBe("");
+  });
+
+  it("rejects an empty title with a named-field error", () => {
+    const bad = [
+      "---",
+      'title: ""',
+      "priority: 3",
+      "labels: []",
+      "dependencies: []",
+      "---",
+      "## Description",
+      "",
+      "## Design",
+      "",
+      "## Acceptance",
+      "",
+      "## Notes",
+      "",
+    ].join("\n");
+    expect(() => parseBuffer(bad)).toThrow(/title.*empty/);
+  });
+
+  it("rejects a whitespace-only title", () => {
+    const bad = [
+      "---",
+      'title: "   "',
+      "priority: 3",
+      "labels: []",
+      "dependencies: []",
+      "---",
+      "## Description",
+      "",
+    ].join("\n");
+    expect(() => parseBuffer(bad)).toThrow(/title.*empty/);
+  });
+
+  it("rejects priority outside 0..4", () => {
+    for (const p of [-1, 5, 10, 99]) {
+      const bad = [
+        "---",
+        'title: "T"',
+        `priority: ${p}`,
+        "labels: []",
+        "dependencies: []",
+        "---",
+        "## Description",
+        "",
+      ].join("\n");
+      expect(() => parseBuffer(bad)).toThrow(/priority.*between 0 and 4/);
+    }
+  });
+
+  it("rejects non-integer priority", () => {
+    const bad = [
+      "---",
+      'title: "T"',
+      "priority: 2.5",
+      "labels: []",
+      "dependencies: []",
+      "---",
+      "## Description",
+      "",
+    ].join("\n");
+    expect(() => parseBuffer(bad)).toThrow(/priority.*integer/);
+  });
+
+  it("round-trips a title containing newlines and tabs", () => {
+    const task = makeTask({ title: "line one\nline two\twith tab" });
+    const text = renderBuffer(task);
+    // The rendered frontmatter must be parseable (no raw newlines in the
+    // quoted scalar) — a raw \n would break YAML's double-quoted string.
+    const { task: parsed } = parseBuffer(text);
+    expect(parsed.title).toBe("line one\nline two\twith tab");
   });
 
   it("trims trailing whitespace from captured fields", () => {
@@ -622,6 +695,22 @@ describe("assertInteractive", () => {
     expect(() => assertInteractive()).toThrow(
       /forge tasks edit requires an interactive terminal/
     );
+  });
+
+  it("throws for any truthy CI value (e.g. '1', 'yes')", () => {
+    process.stdout.isTTY = true;
+    for (const v of ["1", "yes", "gitlab"]) {
+      process.env.CI = v;
+      expect(() => assertInteractive()).toThrow(
+        /forge tasks edit requires an interactive terminal/
+      );
+    }
+  });
+
+  it("does not throw when CI is the empty string (treated as unset)", () => {
+    process.stdout.isTTY = true;
+    process.env.CI = "";
+    expect(() => assertInteractive()).not.toThrow();
   });
 
   it("returns void (does not throw) when isTTY is truthy and CI is unset", () => {

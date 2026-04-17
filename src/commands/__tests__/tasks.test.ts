@@ -1653,6 +1653,83 @@ describe("forge tasks CLI", () => {
       expect(data.tasks[0].dependencies).toEqual([]);
     });
 
+    it("dep validation: self-cycle triggers a re-open with a cycle error", async () => {
+      setupFeature(tmp, "auth", editFixture());
+      const filePath = join(tmp, "plans", "auth", TASKS_FILENAME);
+
+      // First call: make the task depend on itself → creates a self-cycle.
+      // Second call: strip the self-dep back to a clean buffer.
+      const { cmd: editor, logPath } = sequentialEditor([
+        `(s) => s.replace('dependencies: []', 'dependencies: ["TEST-1.1"]')`,
+        `(s) => s.replace('dependencies: ["TEST-1.1"]', 'dependencies: []')`,
+      ]);
+
+      await tasks(["edit", "TEST-1.1", "--editor", editor]);
+
+      const log = readEditorLog(logPath);
+      expect(log.length).toBe(2);
+      // Second invocation's initial content carries the cycle error.
+      expect(log[1].input).toContain("Cycle detected");
+      expect(log[1].input).toContain("TEST-1.1");
+
+      const data = readJson(filePath);
+      expect(data.tasks[0].dependencies).toEqual([]);
+    });
+
+    it("dep validation: indirect cycle (A→B→A) rejected; dry-run surfaces it once", async () => {
+      const fx: TasksFile = {
+        version: 1,
+        epics: [{ id: "TEST-1", title: "Phase 1", created: "2026-03-30" }],
+        tasks: [
+          {
+            id: "TEST-1.1",
+            title: "A",
+            status: "open",
+            priority: 2,
+            labels: [],
+            description: "",
+            design: "",
+            acceptance: [],
+            notes: "",
+            dependencies: [],
+            comments: [],
+            closeReason: null,
+          },
+          {
+            id: "TEST-1.2",
+            title: "B",
+            status: "open",
+            priority: 2,
+            labels: [],
+            description: "",
+            design: "",
+            acceptance: [],
+            notes: "",
+            // B already depends on A; adding A→B would close an A→B→A cycle.
+            dependencies: ["TEST-1.1"],
+            comments: [],
+            closeReason: null,
+          },
+        ],
+      };
+      setupFeature(tmp, "auth", fx);
+
+      const { cmd: editor, logPath } = sequentialEditor([
+        `(s) => s.replace('dependencies: []', 'dependencies: ["TEST-1.2"]')`,
+      ]);
+
+      try {
+        await tasks(["edit", "TEST-1.1", "--editor", editor, "--dry-run"]);
+      } catch {
+        /* exit */
+      }
+
+      expect(exitSpy).toHaveBeenCalledWith(1);
+      expect(readEditorLog(logPath).length).toBe(1);
+      const errMsgs = errorSpy.mock.calls.map((c: string[]) => c[0] ?? "").join("\n");
+      expect(errMsgs).toContain("Cycle detected");
+    });
+
     it("dep validation: batch error names all unknown ids at once", async () => {
       setupFeature(tmp, "auth", editFixture());
 

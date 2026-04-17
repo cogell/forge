@@ -1253,17 +1253,41 @@ async function handleEdit(args: string[], positional: string[], cwd: string): Pr
     }
 
     // Dependency-existence validation — batch-report every unknown id.
+    // AND cycle validation — reject a dependency graph that would cause
+    // the edited task to (transitively) depend on itself.
     if (parseResult.task.dependencies.length > 0) {
       const allIds = new Set<string>();
+      const depsById = new Map<string, string[]>();
       for (const fp of discoverTaskFiles(cwd)) {
         const d = readTasksFile(fp);
-        if (d) for (const t of d.tasks) allIds.add(t.id);
+        if (!d) continue;
+        for (const t of d.tasks) {
+          allIds.add(t.id);
+          depsById.set(t.id, t.dependencies);
+        }
       }
       const unknown = parseResult.task.dependencies.filter((id) => !allIds.has(id));
       if (unknown.length > 0) {
         const msg =
           `Unknown dependency task ID(s): ${unknown.join(", ")}. ` +
           `Each dependency must reference an existing task.`;
+        if (dryRun) {
+          fail(msg);
+        }
+        bufferToOpen = buildErrorBlock(msg) + userContent;
+        strippedBaseline = userContent;
+        isRetry = true;
+        continue;
+      }
+
+      // Overlay the edited deps onto the graph and DFS from taskId — if
+      // we can reach taskId again, the edit would introduce a cycle.
+      depsById.set(taskId, parseResult.task.dependencies);
+      const cyclePath = findCyclePath(taskId, depsById);
+      if (cyclePath) {
+        const msg =
+          `Cycle detected: ${cyclePath.join(" -> ")}. ` +
+          `A task cannot (transitively) depend on itself.`;
         if (dryRun) {
           fail(msg);
         }
@@ -1350,6 +1374,36 @@ async function handleEdit(args: string[], positional: string[], cwd: string): Pr
   }
 
   console.log(`Updated ${taskId}`);
+}
+
+/**
+ * DFS from `startId` through the dep graph. If any path loops back to
+ * `startId`, return it as `[startId, ..., startId]`. Returns null when
+ * the edited-in deps don't introduce a cycle.
+ *
+ * Unknown ids in `depsById` are treated as leaves (dep-existence check
+ * has already rejected those before this runs).
+ */
+function findCyclePath(
+  startId: string,
+  depsById: Map<string, string[]>,
+): string[] | null {
+  // Iterative DFS carrying path so we can report where the cycle closes.
+  const stack: Array<{ id: string; path: string[] }> = [];
+  const seeds = depsById.get(startId) ?? [];
+  for (const d of seeds) stack.push({ id: d, path: [startId, d] });
+  const visited = new Set<string>();
+
+  while (stack.length > 0) {
+    const { id, path } = stack.pop()!;
+    if (id === startId) return path;
+    if (visited.has(id)) continue;
+    visited.add(id);
+    const next = depsById.get(id);
+    if (!next) continue;
+    for (const n of next) stack.push({ id: n, path: [...path, n] });
+  }
+  return null;
 }
 
 interface ParsedForDiff {

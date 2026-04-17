@@ -125,10 +125,19 @@ export function renderBuffer(task: Task): string {
 
 /**
  * Serialize a string as a YAML scalar. We always quote for safety — user
- * titles may contain `:`, `#`, leading dashes, etc. Escape `"` and `\`.
+ * titles may contain `:`, `#`, leading dashes, etc.
+ *
+ * Escapes: `\`, `"`, and control chars (`\n`, `\r`, `\t`) that would
+ * otherwise make a raw-line double-quoted YAML string invalid. gray-matter
+ * decodes the escape sequences on parse, so round-trip is preserved.
  */
 function yamlScalar(s: string): string {
-  const escaped = s.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  const escaped = s
+    .replace(/\\/g, "\\\\")
+    .replace(/"/g, '\\"')
+    .replace(/\n/g, "\\n")
+    .replace(/\r/g, "\\r")
+    .replace(/\t/g, "\\t");
   return `"${escaped}"`;
 }
 
@@ -180,7 +189,15 @@ export function parseBuffer(text: string): ParseResult {
 
   // Extract editable fields with shape coercion.
   const title = requireString(data.title, "title");
+  if (title.trim() === "") {
+    throw new Error("malformed buffer: field 'title' must not be empty");
+  }
   const priority = requireNumber(data.priority, "priority");
+  if (!Number.isInteger(priority) || priority < 0 || priority > 4) {
+    throw new Error(
+      "malformed buffer: field 'priority' must be an integer between 0 and 4"
+    );
+  }
   const labels = requireStringArray(data.labels, "labels");
   const dependencies = requireStringArray(data.dependencies, "dependencies");
 
@@ -452,7 +469,9 @@ export function runEditor(initialContent: string, opts?: RunEditorOptions): stri
  * Called before any buffer rendering so callers fail fast.
  */
 export function assertInteractive(): void {
-  if (!process.stdout.isTTY || process.env.CI === "true") {
+  // Any truthy $CI value counts: GitHub Actions sets 'true', GitLab/others
+  // use '1'. Empty string and unset fall through to allow interactive use.
+  if (!process.stdout.isTTY || !!process.env.CI) {
     throw new Error(
       "forge tasks edit requires an interactive terminal; CI/non-TTY environments are not supported"
     );
