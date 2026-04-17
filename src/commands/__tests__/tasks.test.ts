@@ -1246,4 +1246,672 @@ describe("forge tasks CLI", () => {
     expect(exitSpy).toHaveBeenCalledWith(1);
     expect(errorSpy.mock.calls.some((c: string[]) => c[0]?.includes("not found"))).toBe(true);
   });
+
+  // ── forge tasks edit (FORGE-4.3) ─────────────────────────
+
+  describe("edit subcommand", () => {
+    // An editor mock that's a no-op (writes the initial buffer back unchanged).
+    const NOOP_EDITOR = `${process.execPath} -e "0"`;
+
+    // An editor mock that replaces the buffer with an empty string.
+    const EMPTY_EDITOR = `${process.execPath} -e "require('fs').writeFileSync(process.argv[1],'')"`;
+
+    /**
+     * Build an editor command that loads the seeded buffer, runs a transformer
+     * function on it, and writes the result back.
+     *
+     * We write the transformer source to a temp .js file and invoke it via
+     * `node <script> <buffer-path>`, which avoids any shell-quoting headaches
+     * that arise from inlining the transformer in `node -e "..."`.
+     */
+    function transformEditor(transformerSrc: string): string {
+      const scriptPath = join(tmp, `.edit-transform-${Math.random().toString(36).slice(2)}.js`);
+      const script =
+        `const f=require('fs');\n` +
+        `const p=process.argv[2];\n` +
+        `const input=f.readFileSync(p,'utf8');\n` +
+        `const transform=${transformerSrc};\n` +
+        `f.writeFileSync(p, transform(input));\n`;
+      writeFileSync(scriptPath, script);
+      return `${process.execPath} ${scriptPath}`;
+    }
+
+    // An editor that should NEVER run — if it does, it exits 99 so we can
+    // catch the "guard was bypassed" failure mode.
+    const FORBIDDEN_EDITOR = `${process.execPath} -e "process.exit(99)"`;
+
+    /**
+     * Build an editor command that returns DIFFERENT content on sequential
+     * invocations — required by FORGE-4.4's retry-loop tests.
+     *
+     * transformers: array of JavaScript source expressions, each a function
+     * `(input: string) => string`. The nth call uses transformers[n]; if the
+     * editor is invoked more times than we have transformers, the last
+     * transformer is reused (keeps max-retry tests concise). The script
+     * also records each invocation's initial-content + output into a sidecar
+     * .log file so tests can introspect what the editor saw.
+     */
+    function sequentialEditor(transformers: string[]): { cmd: string; logPath: string } {
+      const id = Math.random().toString(36).slice(2);
+      const scriptPath = join(tmp, `.edit-seq-${id}.js`);
+      const statePath = join(tmp, `.edit-seq-${id}.state`);
+      const logPath = join(tmp, `.edit-seq-${id}.log`);
+      const transformersJson = JSON.stringify(transformers);
+      const script =
+        `const f=require('fs');\n` +
+        `const p=process.argv[2];\n` +
+        `const statePath=${JSON.stringify(statePath)};\n` +
+        `const logPath=${JSON.stringify(logPath)};\n` +
+        `const transformers=${transformersJson};\n` +
+        `let count=0;\n` +
+        `try { count = parseInt(f.readFileSync(statePath,'utf8'),10) || 0; } catch(e){}\n` +
+        `const idx = Math.min(count, transformers.length-1);\n` +
+        `const input = f.readFileSync(p,'utf8');\n` +
+        `// eslint-disable-next-line no-new-func\n` +
+        `const fn = new Function('s','return ('+transformers[idx]+')(s)');\n` +
+        `const out = fn(input);\n` +
+        `f.writeFileSync(p, out);\n` +
+        `f.appendFileSync(logPath, JSON.stringify({call: count, input, out})+'\\n');\n` +
+        `f.writeFileSync(statePath, String(count+1));\n`;
+      writeFileSync(scriptPath, script);
+      return { cmd: `${process.execPath} ${scriptPath}`, logPath };
+    }
+
+    function readEditorLog(logPath: string): Array<{ call: number; input: string; out: string }> {
+      if (!existsSync(logPath)) return [];
+      return readFileSync(logPath, "utf-8")
+        .trim()
+        .split("\n")
+        .filter((l) => l.length > 0)
+        .map((l) => JSON.parse(l));
+    }
+
+    let savedIsTTY: boolean | undefined;
+    let savedCI: string | undefined;
+
+    beforeEach(() => {
+      savedIsTTY = process.stdout.isTTY;
+      savedCI = process.env.CI;
+      // Default all edit tests to "interactive"; individual guard tests override.
+      process.stdout.isTTY = true;
+      delete process.env.CI;
+    });
+
+    afterEach(() => {
+      process.stdout.isTTY = savedIsTTY as boolean;
+      if (savedCI === undefined) delete process.env.CI;
+      else process.env.CI = savedCI;
+    });
+
+    function editFixture(): TasksFile {
+      return {
+        version: 1,
+        epics: [{ id: "TEST-1", title: "Phase 1", created: "2026-03-30" }],
+        tasks: [
+          {
+            id: "TEST-1.1",
+            title: "Original title",
+            status: "open",
+            priority: 2,
+            labels: ["foo"],
+            description: "desc",
+            design: "design",
+            acceptance: ["ac-1", "ac-2"],
+            notes: "notes",
+            dependencies: [],
+            comments: [],
+            closeReason: null,
+          },
+        ],
+      };
+    }
+
+    it("happy path: editing the title in the buffer updates tasks.json and preserves other fields", async () => {
+      setupFeature(tmp, "auth", editFixture());
+      const filePath = join(tmp, "plans", "auth", TASKS_FILENAME);
+
+      // Replace the title in frontmatter with a new one.
+      const editor = transformEditor(
+        `(s) => s.replace('title: "Original title"', 'title: "New title"')`,
+      );
+
+      await tasks(["edit", "TEST-1.1", "--editor", editor]);
+
+      const data = readJson(filePath);
+      const task = data.tasks[0];
+      expect(task.title).toBe("New title");
+      expect(task.priority).toBe(2);
+      expect(task.labels).toEqual(["foo"]);
+      expect(task.description).toBe("desc");
+      expect(task.design).toBe("design");
+      expect(task.acceptance).toEqual(["ac-1", "ac-2"]);
+      expect(task.notes).toBe("notes");
+      expect(task.dependencies).toEqual([]);
+    });
+
+    it("unchanged buffer: save without changes leaves tasks.json byte-identical", async () => {
+      setupFeature(tmp, "auth", editFixture());
+      const filePath = join(tmp, "plans", "auth", TASKS_FILENAME);
+      const before = readFileSync(filePath, "utf-8");
+
+      await tasks(["edit", "TEST-1.1", "--editor", NOOP_EDITOR]);
+
+      const after = readFileSync(filePath, "utf-8");
+      expect(after).toBe(before);
+      expect(
+        errorSpy.mock.calls.some((c: string[]) => c[0]?.includes("no changes")),
+      ).toBe(true);
+    });
+
+    it("empty buffer: editor empties the file → exit 0, no write, no delete", async () => {
+      setupFeature(tmp, "auth", editFixture());
+      const filePath = join(tmp, "plans", "auth", TASKS_FILENAME);
+      const before = readFileSync(filePath, "utf-8");
+
+      await tasks(["edit", "TEST-1.1", "--editor", EMPTY_EDITOR]);
+
+      const after = readFileSync(filePath, "utf-8");
+      expect(after).toBe(before);
+      expect(
+        errorSpy.mock.calls.some((c: string[]) => c[0]?.includes("empty buffer")),
+      ).toBe(true);
+      // Task must still be present — confirms no delete ran.
+      const data = JSON.parse(after);
+      expect(data.tasks).toHaveLength(1);
+      expect(data.tasks[0].id).toBe("TEST-1.1");
+    });
+
+    it("clear acceptance: removing all '- [ ]' items sets acceptance to []", async () => {
+      setupFeature(tmp, "auth", editFixture());
+      const filePath = join(tmp, "plans", "auth", TASKS_FILENAME);
+
+      // Remove every `- [ ]` line from the buffer.
+      const editor = transformEditor(
+        `(s) => s.split('\\n').filter(l => !/^- \\[ \\]/.test(l)).join('\\n')`,
+      );
+
+      await tasks(["edit", "TEST-1.1", "--editor", editor]);
+
+      const task = readJson(filePath).tasks[0];
+      expect(task.acceptance).toEqual([]);
+    });
+
+    it("unknown task id exits 1 with a clear message", async () => {
+      setupFeature(tmp, "auth", editFixture());
+      try {
+        await tasks(["edit", "TEST-999", "--editor", FORBIDDEN_EDITOR]);
+      } catch {
+        /* exit spy throws */
+      }
+      expect(exitSpy).toHaveBeenCalledWith(1);
+      expect(
+        errorSpy.mock.calls.some((c: string[]) => c[0]?.toLowerCase().includes("not found")),
+      ).toBe(true);
+    });
+
+    it("editing an epic id exits 1 with 'cannot edit epics' message", async () => {
+      setupFeature(tmp, "auth", editFixture());
+      try {
+        await tasks(["edit", "TEST-1", "--editor", FORBIDDEN_EDITOR]);
+      } catch {
+        /* exit spy throws */
+      }
+      expect(exitSpy).toHaveBeenCalledWith(1);
+      expect(
+        errorSpy.mock.calls.some((c: string[]) => c[0]?.includes("cannot edit epics")),
+      ).toBe(true);
+    });
+
+    it("unknown frontmatter key under --dry-run exits 1 with parse error naming the key", async () => {
+      // FORGE-4.4: --dry-run is single-shot, so a parse error surfaces
+      // immediately (no retry loop). Non-dry-run behavior is covered by
+      // the max-retries / retry-scenario tests further down.
+      setupFeature(tmp, "auth", editFixture());
+      // Inject `bogus: true` into the YAML frontmatter.
+      const editor = transformEditor(
+        `(s) => s.replace('labels:', 'bogus: true\\nlabels:')`,
+      );
+
+      try {
+        await tasks(["edit", "TEST-1.1", "--editor", editor, "--dry-run"]);
+      } catch {
+        /* exit spy throws */
+      }
+      expect(exitSpy).toHaveBeenCalledWith(1);
+      expect(
+        errorSpy.mock.calls.some((c: string[]) => c[0]?.includes("bogus")),
+      ).toBe(true);
+    });
+
+    it("--dry-run: modifies buffer but leaves tasks.json byte-identical; prints diff", async () => {
+      setupFeature(tmp, "auth", editFixture());
+      const filePath = join(tmp, "plans", "auth", TASKS_FILENAME);
+      const before = readFileSync(filePath, "utf-8");
+
+      const editor = transformEditor(
+        `(s) => s.replace('title: "Original title"', 'title: "New title"')`,
+      );
+
+      await tasks(["edit", "TEST-1.1", "--editor", editor, "--dry-run"]);
+
+      const after = readFileSync(filePath, "utf-8");
+      expect(after).toBe(before);
+      // Diff printed to stdout — we expect the FIELD line mentioning title and both values.
+      const logs = logSpy.mock.calls.map((c: string[]) => c[0] ?? "").join("\n");
+      expect(logs.toLowerCase()).toContain("title");
+      expect(logs).toContain("Original title");
+      expect(logs).toContain("New title");
+    });
+
+    it("no-TTY guard: isTTY=false fails before spawning the editor", async () => {
+      setupFeature(tmp, "auth", editFixture());
+      process.stdout.isTTY = false;
+
+      try {
+        await tasks(["edit", "TEST-1.1", "--editor", FORBIDDEN_EDITOR]);
+      } catch {
+        /* exit spy throws */
+      }
+      // Must have exited with 1 and NOT with 99 (99 = FORBIDDEN_EDITOR ran).
+      expect(exitSpy).toHaveBeenCalledWith(1);
+      expect(exitSpy).not.toHaveBeenCalledWith(99);
+    });
+
+    it("CI=true guard: fails before spawning the editor", async () => {
+      setupFeature(tmp, "auth", editFixture());
+      process.stdout.isTTY = true;
+      process.env.CI = "true";
+
+      try {
+        await tasks(["edit", "TEST-1.1", "--editor", FORBIDDEN_EDITOR]);
+      } catch {
+        /* exit spy throws */
+      }
+      expect(exitSpy).toHaveBeenCalledWith(1);
+      expect(exitSpy).not.toHaveBeenCalledWith(99);
+    });
+
+    it("--help mentions --editor, --dry-run, --force", async () => {
+      await tasks(["edit", "--help"]);
+      const helpText = logSpy.mock.calls.map((c: string[]) => c[0]).join("\n");
+      expect(helpText).toContain("--editor");
+      expect(helpText).toContain("--dry-run");
+      expect(helpText).toContain("--force");
+    });
+
+    // ── FORGE-4.4: retry loop + optimistic lock + --force ───
+
+    it("concurrency conflict without --force exits 1 and preserves the concurrent write", async () => {
+      setupFeature(tmp, "auth", editFixture());
+      const filePath = join(tmp, "plans", "auth", TASKS_FILENAME);
+
+      // Editor mock that also triggers a concurrent write via a node-level
+      // sidechannel: each invocation rewrites tasks.json on disk BEFORE
+      // returning the buffer. This simulates another process saving while
+      // the editor is open.
+      const concurrentTitle = "Concurrent write wins";
+      const scriptPath = join(tmp, ".concurrent-edit.js");
+      const script =
+        `const f=require('fs');\n` +
+        `const p=process.argv[2];\n` +
+        `const tasksPath=${JSON.stringify(filePath)};\n` +
+        `// Mutate tasks.json mid-edit (simulates another process).\n` +
+        `const d=JSON.parse(f.readFileSync(tasksPath,'utf8'));\n` +
+        `d.tasks[0].title = ${JSON.stringify(concurrentTitle)};\n` +
+        `f.writeFileSync(tasksPath, JSON.stringify(d, null, 2) + '\\n');\n` +
+        `// Now return a different title in the buffer.\n` +
+        `const input = f.readFileSync(p,'utf8');\n` +
+        `f.writeFileSync(p, input.replace('title: "Original title"', 'title: "Editor title"'));\n`;
+      writeFileSync(scriptPath, script);
+      const editor = `${process.execPath} ${scriptPath}`;
+
+      try {
+        await tasks(["edit", "TEST-1.1", "--editor", editor]);
+      } catch {
+        /* exit */
+      }
+
+      expect(exitSpy).toHaveBeenCalledWith(1);
+      const errMsgs = errorSpy.mock.calls.map((c: string[]) => c[0] ?? "").join("\n");
+      expect(errMsgs).toContain("concurrent write detected");
+      expect(errMsgs).toContain("--force");
+      expect(errMsgs.toLowerCase()).toContain("title"); // server-side diff
+
+      // The concurrent write WON — edit did not overwrite.
+      const data = readJson(filePath);
+      expect(data.tasks[0].title).toBe(concurrentTitle);
+    });
+
+    it("concurrency conflict with --force overwrites the concurrent write", async () => {
+      setupFeature(tmp, "auth", editFixture());
+      const filePath = join(tmp, "plans", "auth", TASKS_FILENAME);
+
+      const scriptPath = join(tmp, ".concurrent-edit-force.js");
+      const script =
+        `const f=require('fs');\n` +
+        `const p=process.argv[2];\n` +
+        `const tasksPath=${JSON.stringify(filePath)};\n` +
+        `const d=JSON.parse(f.readFileSync(tasksPath,'utf8'));\n` +
+        `d.tasks[0].title = 'Concurrent title';\n` +
+        `f.writeFileSync(tasksPath, JSON.stringify(d, null, 2) + '\\n');\n` +
+        `const input = f.readFileSync(p,'utf8');\n` +
+        `f.writeFileSync(p, input.replace('title: "Original title"', 'title: "Editor wins"'));\n`;
+      writeFileSync(scriptPath, script);
+      const editor = `${process.execPath} ${scriptPath}`;
+
+      await tasks(["edit", "TEST-1.1", "--editor", editor, "--force"]);
+
+      const data = readJson(filePath);
+      expect(data.tasks[0].title).toBe("Editor wins");
+    });
+
+    it("parse-error re-open: invalid-then-valid buffers invoke the editor twice; sentinel appears on retry", async () => {
+      setupFeature(tmp, "auth", editFixture());
+      const filePath = join(tmp, "plans", "auth", TASKS_FILENAME);
+
+      const { cmd: editor, logPath } = sequentialEditor([
+        // First call: produce an invalid buffer (unknown frontmatter key).
+        `(s) => s.replace('labels:', 'bogus: true\\nlabels:')`,
+        // Second call: fix it up — strip the bogus line AND rename title.
+        `(s) => s.replace(/^bogus: true\\n/m, '').replace('title: "Original title"', 'title: "Fixed"')`,
+      ]);
+
+      await tasks(["edit", "TEST-1.1", "--editor", editor]);
+
+      const log = readEditorLog(logPath);
+      expect(log.length).toBe(2);
+      // Second invocation's initialContent contains the sentinel block
+      // with a mention of the parse failure.
+      expect(log[1].input).toContain("# forge:error-block-start");
+      expect(log[1].input).toContain("# forge:error-block-end");
+      expect(log[1].input.toLowerCase()).toContain("bogus");
+
+      const data = readJson(filePath);
+      expect(data.tasks[0].title).toBe("Fixed");
+    });
+
+    it("dep validation: unknown dep id triggers re-open with the unknown-id error, then succeeds", async () => {
+      setupFeature(tmp, "auth", editFixture());
+      const filePath = join(tmp, "plans", "auth", TASKS_FILENAME);
+
+      const { cmd: editor, logPath } = sequentialEditor([
+        // First call: inject a dep that doesn't exist.
+        `(s) => s.replace('dependencies: []', 'dependencies: ["GHOST-1"]')`,
+        // Second call: strip the ghost dep back out.
+        `(s) => s.replace('dependencies: ["GHOST-1"]', 'dependencies: []')`,
+      ]);
+
+      await tasks(["edit", "TEST-1.1", "--editor", editor]);
+
+      const log = readEditorLog(logPath);
+      expect(log.length).toBe(2);
+      expect(log[1].input).toContain("GHOST-1");
+      expect(log[1].input).toContain("Unknown dependency");
+
+      const data = readJson(filePath);
+      // Write succeeded — dependencies are [] (the retry-corrected buffer).
+      expect(data.tasks[0].dependencies).toEqual([]);
+    });
+
+    it("dep validation: self-cycle triggers a re-open with a cycle error", async () => {
+      setupFeature(tmp, "auth", editFixture());
+      const filePath = join(tmp, "plans", "auth", TASKS_FILENAME);
+
+      // First call: make the task depend on itself → creates a self-cycle.
+      // Second call: strip the self-dep back to a clean buffer.
+      const { cmd: editor, logPath } = sequentialEditor([
+        `(s) => s.replace('dependencies: []', 'dependencies: ["TEST-1.1"]')`,
+        `(s) => s.replace('dependencies: ["TEST-1.1"]', 'dependencies: []')`,
+      ]);
+
+      await tasks(["edit", "TEST-1.1", "--editor", editor]);
+
+      const log = readEditorLog(logPath);
+      expect(log.length).toBe(2);
+      // Second invocation's initial content carries the cycle error.
+      expect(log[1].input).toContain("Cycle detected");
+      expect(log[1].input).toContain("TEST-1.1");
+
+      const data = readJson(filePath);
+      expect(data.tasks[0].dependencies).toEqual([]);
+    });
+
+    it("dep validation: indirect cycle (A→B→A) rejected; dry-run surfaces it once", async () => {
+      const fx: TasksFile = {
+        version: 1,
+        epics: [{ id: "TEST-1", title: "Phase 1", created: "2026-03-30" }],
+        tasks: [
+          {
+            id: "TEST-1.1",
+            title: "A",
+            status: "open",
+            priority: 2,
+            labels: [],
+            description: "",
+            design: "",
+            acceptance: [],
+            notes: "",
+            dependencies: [],
+            comments: [],
+            closeReason: null,
+          },
+          {
+            id: "TEST-1.2",
+            title: "B",
+            status: "open",
+            priority: 2,
+            labels: [],
+            description: "",
+            design: "",
+            acceptance: [],
+            notes: "",
+            // B already depends on A; adding A→B would close an A→B→A cycle.
+            dependencies: ["TEST-1.1"],
+            comments: [],
+            closeReason: null,
+          },
+        ],
+      };
+      setupFeature(tmp, "auth", fx);
+
+      const { cmd: editor, logPath } = sequentialEditor([
+        `(s) => s.replace('dependencies: []', 'dependencies: ["TEST-1.2"]')`,
+      ]);
+
+      try {
+        await tasks(["edit", "TEST-1.1", "--editor", editor, "--dry-run"]);
+      } catch {
+        /* exit */
+      }
+
+      expect(exitSpy).toHaveBeenCalledWith(1);
+      expect(readEditorLog(logPath).length).toBe(1);
+      const errMsgs = errorSpy.mock.calls.map((c: string[]) => c[0] ?? "").join("\n");
+      expect(errMsgs).toContain("Cycle detected");
+    });
+
+    it("dep validation: batch error names all unknown ids at once", async () => {
+      setupFeature(tmp, "auth", editFixture());
+
+      // First call: inject two unknown deps. Second call: strip them back.
+      // The second invocation's initialContent is what we inspect — the
+      // sentinel block must name both unknown ids together.
+      const { cmd: editor, logPath } = sequentialEditor([
+        `(s) => s.replace('dependencies: []', 'dependencies: ["GHOST-1", "GHOST-2"]')`,
+        `(s) => s.replace('dependencies: ["GHOST-1", "GHOST-2"]', 'dependencies: []')`,
+      ]);
+
+      await tasks(["edit", "TEST-1.1", "--editor", editor]);
+
+      const log = readEditorLog(logPath);
+      expect(log.length).toBe(2);
+      // Second invocation's initialContent names BOTH ghosts in one error
+      // (matches FORGE-3.3's batch-reporting style).
+      expect(log[1].input).toContain("GHOST-1");
+      expect(log[1].input).toContain("GHOST-2");
+      expect(log[1].input).toContain("Unknown dependency");
+    });
+
+    it("max retries: 5 invalid buffers in a row exit 1 with 'too many parse failures'", async () => {
+      setupFeature(tmp, "auth", editFixture());
+      const filePath = join(tmp, "plans", "auth", TASKS_FILENAME);
+      const before = readFileSync(filePath, "utf-8");
+
+      // A transformer that ALWAYS yields an invalid buffer. Note: the
+      // retry flow strips the error block before handing back to the editor,
+      // so we don't have to worry about the bogus-line doubling.
+      const { cmd: editor, logPath } = sequentialEditor([
+        `(s) => s.replace('labels:', 'bogus: true\\nlabels:')`,
+      ]);
+
+      try {
+        await tasks(["edit", "TEST-1.1", "--editor", editor]);
+      } catch {
+        /* exit */
+      }
+
+      expect(exitSpy).toHaveBeenCalledWith(1);
+      const errMsgs = errorSpy.mock.calls.map((c: string[]) => c[0] ?? "").join("\n");
+      expect(errMsgs).toContain("too many parse failures");
+
+      // Editor was invoked exactly MAX_EDIT_RETRIES (5) times.
+      expect(readEditorLog(logPath).length).toBe(5);
+
+      // tasks.json unmodified.
+      expect(readFileSync(filePath, "utf-8")).toBe(before);
+    });
+
+    it("sentinel stripping precision: after 3 retries, no error-block markers remain and renderBuffer reference header survives", async () => {
+      setupFeature(tmp, "auth", editFixture());
+      const filePath = join(tmp, "plans", "auth", TASKS_FILENAME);
+
+      // Three consecutive invalid responses, then a valid one. Each invalid
+      // transformer must BOTH produce an invalid parse AND modify content
+      // (otherwise the handler trips the "unchanged after error" guard).
+      // We do this by toggling between two different invalid frontmatter
+      // injections; each iteration strips the prior one before injecting.
+      const invalidA = `(s) => s.replace(/^bogus[AB]: true\\n/gm,'').replace('labels:', 'bogusA: true\\nlabels:')`;
+      const invalidB = `(s) => s.replace(/^bogus[AB]: true\\n/gm,'').replace('labels:', 'bogusB: true\\nlabels:')`;
+      // Emulates a user who, on the final attempt, cleans up both the
+      // bogus frontmatter AND the sentinel error block (as the buffer
+      // instructs them to). Then renames the title.
+      const fixAndRename =
+        `(s) => s.replace(/^bogus[AB]: true\\n/gm, '')` +
+        `.replace(/# forge:error-block-start[\\s\\S]*?# forge:error-block-end\\n?/g, '')` +
+        `.replace('title: "Original title"', 'title: "After 3 retries"')`;
+      const { cmd: editor, logPath } = sequentialEditor([
+        invalidA,
+        invalidB,
+        invalidA,
+        fixAndRename,
+      ]);
+
+      await tasks(["edit", "TEST-1.1", "--editor", editor]);
+
+      const log = readEditorLog(logPath);
+      expect(log.length).toBe(4);
+
+      // The FINAL buffer the editor produced (the one we consumed for writing)
+      // must have exactly zero sentinel-start lines — no nested error blocks.
+      const finalOutput = log[log.length - 1].out;
+      const sentinelCount = (finalOutput.match(/# forge:error-block-start/g) || [])
+        .length;
+      expect(sentinelCount).toBe(0);
+
+      // renderBuffer's reference header (also `#` comments) is preserved
+      // verbatim across retries — the editor saw it every call.
+      for (const entry of log) {
+        expect(entry.input).toContain(`# id: TEST-1.1`);
+        expect(entry.input).toContain(`# status: open`);
+      }
+
+      // Write actually landed.
+      const data = readJson(filePath);
+      expect(data.tasks[0].title).toBe("After 3 retries");
+    });
+
+    it("retry-abort UX: unchanged buffer on retry emits the 'no changes after error' message", async () => {
+      setupFeature(tmp, "auth", editFixture());
+      const filePath = join(tmp, "plans", "auth", TASKS_FILENAME);
+      const before = readFileSync(filePath, "utf-8");
+
+      // First call: produce invalid buffer. Second call: strip the error
+      // block (so the user-content baseline is restored unchanged) and
+      // otherwise leave buffer as-is — this is the "user saw the error,
+      // saved immediately without fixing" scenario.
+      const { cmd: editor } = sequentialEditor([
+        `(s) => s.replace('labels:', 'bogus: true\\nlabels:')`,
+        // Remove the error block (so buffer equals baseline userContent).
+        // The handler also strips the error block — either way we want
+        // userContent to equal the prior baseline, so we just remove the
+        // injected `bogus:` line (baseline after retry = "invalid content
+        // without the error block"). The retry handler's stripping leaves
+        // this buffer unchanged, so it should match strippedBaseline.
+        `(s) => s`,
+      ]);
+
+      await tasks(["edit", "TEST-1.1", "--editor", editor]);
+
+      expect(readFileSync(filePath, "utf-8")).toBe(before);
+      const errMsgs = errorSpy.mock.calls.map((c: string[]) => c[0] ?? "").join("\n");
+      expect(errMsgs).toContain("no changes after error");
+    });
+
+    it("--dry-run + parse error is single-shot: exits 1 without entering the retry loop", async () => {
+      setupFeature(tmp, "auth", editFixture());
+
+      const { cmd: editor, logPath } = sequentialEditor([
+        `(s) => s.replace('labels:', 'bogus: true\\nlabels:')`,
+      ]);
+
+      try {
+        await tasks(["edit", "TEST-1.1", "--editor", editor, "--dry-run"]);
+      } catch {
+        /* exit */
+      }
+
+      expect(exitSpy).toHaveBeenCalledWith(1);
+      // Editor invoked exactly once — no retry loop.
+      expect(readEditorLog(logPath).length).toBe(1);
+    });
+
+    it("--dry-run skips the lock check even if tasks.json changes mid-flight", async () => {
+      setupFeature(tmp, "auth", editFixture());
+      const filePath = join(tmp, "plans", "auth", TASKS_FILENAME);
+      const before = readFileSync(filePath, "utf-8");
+
+      const scriptPath = join(tmp, ".dryrun-concurrent.js");
+      const script =
+        `const f=require('fs');\n` +
+        `const p=process.argv[2];\n` +
+        `const tasksPath=${JSON.stringify(filePath)};\n` +
+        `// Concurrent write: bump title on disk.\n` +
+        `const d=JSON.parse(f.readFileSync(tasksPath,'utf8'));\n` +
+        `d.tasks[0].title = 'Concurrent';\n` +
+        `f.writeFileSync(tasksPath, JSON.stringify(d, null, 2) + '\\n');\n` +
+        `const input = f.readFileSync(p,'utf8');\n` +
+        `f.writeFileSync(p, input.replace('title: "Original title"', 'title: "Dry run title"'));\n`;
+      writeFileSync(scriptPath, script);
+      const editor = `${process.execPath} ${scriptPath}`;
+
+      // Should NOT exit 1 — dry-run skips the lock check.
+      await tasks(["edit", "TEST-1.1", "--editor", editor, "--dry-run"]);
+
+      // The concurrent write landed on disk; dry-run did NOT overwrite it.
+      // (We wrote Concurrent above, and the edit command itself never wrote.)
+      const data = readJson(filePath);
+      expect(data.tasks[0].title).toBe("Concurrent");
+      // Before state had "Original title"; after state is Concurrent (not
+      // "Dry run title") — so the --dry-run did not suddenly start writing.
+      expect(JSON.parse(before).tasks[0].title).toBe("Original title");
+
+      // Diff was still printed to stdout.
+      const logs = logSpy.mock.calls.map((c: string[]) => c[0] ?? "").join("\n");
+      expect(logs.toLowerCase()).toContain("title");
+      expect(logs).toContain("Dry run title");
+      // No concurrent-write error emitted.
+      const errMsgs = errorSpy.mock.calls.map((c: string[]) => c[0] ?? "").join("\n");
+      expect(errMsgs).not.toContain("concurrent write detected");
+    });
+  });
 });

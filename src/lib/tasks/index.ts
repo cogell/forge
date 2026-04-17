@@ -51,3 +51,15 @@ export {
 
 // Validation
 export { validateDag } from "./validate";
+
+// Editor
+export {
+  renderBuffer,
+  parseBuffer,
+  hashTask,
+  runEditor,
+  assertInteractive,
+  type ParseResult,
+  type ParsedTask,
+  type RunEditorOptions,
+} from "./editor";

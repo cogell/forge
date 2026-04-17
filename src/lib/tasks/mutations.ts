@@ -397,6 +397,18 @@ export async function updateTask(
      * the acceptance field (existing criteria are preserved).
      */
     replaceAcceptance?: boolean;
+    /**
+     * Full-replace labels[]. Used by `forge tasks edit` (FORGE-4.3) where
+     * the editor buffer represents the complete desired label set. Prefer
+     * `addLabels` for CLI-style append semantics.
+     */
+    labels?: string[];
+    /**
+     * Full-replace dependencies[]. Used by `forge tasks edit` (FORGE-4.3)
+     * where the editor buffer represents the complete desired dependency
+     * set. Prefer `addDep`/`removeDep` for CLI-style one-at-a-time edits.
+     */
+    dependencies?: string[];
   },
   cwd?: string
 ): Promise<void> {
@@ -417,18 +429,22 @@ export async function updateTask(
     if (fields.description !== undefined) task.description = fields.description;
     if (fields.design !== undefined) task.design = fields.design;
     if (fields.notes !== undefined) task.notes = fields.notes;
-    if (fields.addAcceptance && fields.addAcceptance.length > 0) {
-      if (fields.replaceAcceptance) {
-        task.acceptance = [...fields.addAcceptance];
-      } else {
-        for (const ac of fields.addAcceptance) task.acceptance.push(ac);
-      }
+    if (fields.replaceAcceptance && fields.addAcceptance !== undefined) {
+      // Honor replaceAcceptance even when the caller passes an empty array —
+      // this lets `forge tasks edit` clear all acceptance criteria in a
+      // single updateTask() call. Without addAcceptance at all, the flag is
+      // a no-op (preserves existing behavior).
+      task.acceptance = [...fields.addAcceptance];
+    } else if (fields.addAcceptance && fields.addAcceptance.length > 0) {
+      for (const ac of fields.addAcceptance) task.acceptance.push(ac);
     }
     if (fields.addLabels) {
       for (const lbl of fields.addLabels) {
         if (!task.labels.includes(lbl)) task.labels.push(lbl);
       }
     }
+    if (fields.labels !== undefined) task.labels = [...fields.labels];
+    if (fields.dependencies !== undefined) task.dependencies = [...fields.dependencies];
 
     if (task.status === "open") task.closeReason = null;
 

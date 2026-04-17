@@ -25,6 +25,11 @@ import {
   getReadyTasks,
   getDescendants,
   resolveTasksPath,
+  renderBuffer,
+  parseBuffer,
+  hashTask,
+  runEditor,
+  assertInteractive,
   SCHEMA_VERSION,
   TASKS_FILENAME,
   PHASE_LABEL_PREFIX,
@@ -38,6 +43,7 @@ import {
 const RESERVED = [
   "ready", "list", "show", "create", "close", "update",
   "comment", "label", "dep", "validate", "epic", "delete",
+  "edit",
 ];
 
 const VALID_STATUSES: TaskStatus[] = ["open", "in_progress", "closed"];
@@ -48,12 +54,14 @@ const VALUE_FLAGS = new Set([
   "-d", "--description", "--design", "--notes",
   "--status", "--title", "--reason",
   "--blocked-by", "--phase", "--id",
+  "--editor",
 ]);
 
 /** Boolean flags that don't consume a value. */
 const BOOLEAN_FLAGS = new Set([
   "--json", "--project", "--force", "--help", "-h",
   "--confirm", "--children", "--full", "--replace",
+  "--dry-run",
 ]);
 
 const TASKS_HELP = `
@@ -219,6 +227,28 @@ Notes:
     dependencies[] across all feature files.
 `.trim(),
 
+  edit: `
+forge tasks edit — open a task in your editor
+
+Usage: forge tasks edit <task-id> [options]
+
+Arguments:
+  task-id         The task to edit (looked up across all features)
+
+Options:
+  --editor <cmd>  Editor command to use (overrides $VISUAL/$EDITOR/'vi')
+  --dry-run       Show field-by-field diff; do not write tasks.json
+  --force         Reserved for conflict override (see FORGE-4.4); no-op here
+  --json          Output as JSON
+  --help, -h      Show this help
+
+Notes:
+  - Requires an interactive terminal; fails fast in CI / non-TTY contexts.
+  - Unchanged buffer: exits 0 without writing.
+  - Empty buffer: exits 0 without writing (does NOT delete the task).
+  - Only child tasks are editable; use 'forge tasks update' for epic fields.
+`.trim(),
+
   close: `
 forge tasks close — close a task
 
@@ -381,6 +411,7 @@ async function tasksInner(args: string[], json: boolean, project: boolean): Prom
       case "show": return handleShow(positional, args, json, cwd);
       case "ready": return handleReady(args, positional, json, cwd);
       case "delete": return handleDelete(positional, args, json, cwd);
+      case "edit": return handleEdit(args, positional, cwd);
       default:
         fail(`Subcommand "${subcommand}" is not yet implemented.`);
     }
@@ -1031,6 +1062,404 @@ async function handleDelete(
     else console.log(`Deleted task ${id}`);
   } catch (err) {
     fail((err as Error).message);
+  }
+}
+
+// ── Edit handler (FORGE-4.3 / 4.4) ──────────────────────
+
+/** Sentinel markers for the error block prepended on retry. */
+const ERROR_BLOCK_START = "# forge:error-block-start";
+const ERROR_BLOCK_END = "# forge:error-block-end";
+const MAX_EDIT_RETRIES = 5;
+
+/**
+ * Build an error block prefix from a failure message, per FORGE-4.4 spec.
+ * The block is delimited by sentinel markers so strip-on-retry is
+ * unambiguous (any other leading `#` lines — e.g. renderBuffer's reference
+ * header — must survive untouched).
+ */
+function buildErrorBlock(message: string): string {
+  return [
+    ERROR_BLOCK_START,
+    "# edit failed — fix the issues below and save again, or quit to abort:",
+    "#",
+    `#   - ${message}`,
+    "#",
+    ERROR_BLOCK_END,
+    "",
+    "",
+  ].join("\n");
+}
+
+/**
+ * Strip the first contiguous error block (sentinel-delimited, plus the
+ * trailing blank line) from a buffer. Leaves all other `#` comments
+ * intact — critical for preserving renderBuffer's reference header
+ * across retries.
+ */
+function stripErrorBlock(buffer: string): string {
+  const lines = buffer.split("\n");
+  const startIdx = lines.indexOf(ERROR_BLOCK_START);
+  if (startIdx === -1) return buffer;
+  let endIdx = -1;
+  for (let i = startIdx + 1; i < lines.length; i++) {
+    if (lines[i] === ERROR_BLOCK_END) {
+      endIdx = i;
+      break;
+    }
+  }
+  if (endIdx === -1) return buffer; // malformed — leave alone
+  // Also consume ONE trailing blank line if present.
+  let cutEnd = endIdx + 1;
+  if (cutEnd < lines.length && lines[cutEnd] === "") cutEnd++;
+  lines.splice(startIdx, cutEnd - startIdx);
+  return lines.join("\n");
+}
+
+/**
+ * `forge tasks edit <task-id>` — render the task as a markdown buffer, spawn
+ * the user's editor, parse the result, apply dep-validation and an
+ * optimistic-lock check, then write via updateTask.
+ *
+ * FORGE-4.4 extends 4.3's happy path with:
+ *   - crontab-style re-open loop on parse/dep-validation errors
+ *   - optimistic lock on the reloaded task (skipped with --force)
+ *   - batch dependency-existence validation
+ *   - distinct retry-abort UX message
+ *
+ * --dry-run is single-shot: no retry loop, no lock check.
+ */
+async function handleEdit(args: string[], positional: string[], cwd: string): Promise<void> {
+  // 1. TTY/CI guard — fail fast before any editor spawn.
+  try {
+    assertInteractive();
+  } catch (err) {
+    fail((err as Error).message);
+  }
+
+  // 2. Parse flags.
+  const dryRun = args.includes("--dry-run");
+  const force = args.includes("--force");
+
+  let editorOverride: string | undefined;
+  const editorIdx = args.indexOf("--editor");
+  if (editorIdx !== -1 && editorIdx + 1 < args.length) {
+    editorOverride = args[editorIdx + 1];
+  }
+
+  const taskId = positional[1];
+  if (!taskId) fail("Usage: forge tasks edit <task-id> [--editor <cmd>] [--dry-run]");
+
+  // 3. Look up task across feature files (mirrors handleShow / handleUpdate).
+  const files = discoverTaskFiles(cwd);
+  let found: { task: Task } | null = null;
+  let isEpicMatch = false;
+
+  for (const filePath of files) {
+    const data = readTasksFile(filePath);
+    if (!data) continue;
+    if (data.epics.some((e) => e.id === taskId)) {
+      isEpicMatch = true;
+      break;
+    }
+    const task = data.tasks.find((t) => t.id === taskId);
+    if (task) {
+      found = { task };
+      break;
+    }
+  }
+
+  if (isEpicMatch) {
+    fail("cannot edit epics; edit their child tasks, or use forge tasks update <epic-id> for individual fields");
+  }
+  if (!found) {
+    fail(`Task "${taskId}" not found. Usage: forge tasks edit <task-id>`);
+  }
+
+  const task = found.task;
+
+  // 4. Pre-edit hash for optimistic lock detection.
+  const openHash = hashTask(task);
+
+  // 5. Render the initial editable buffer.
+  const initialBuffer = renderBuffer(task);
+
+  // ── Retry loop ──────────────────────────────────────
+  //
+  // - `bufferToOpen` is the content handed to the editor this iteration.
+  //   On retry it's (previous user edits) with any prior error block
+  //   stripped, and a new error block prepended.
+  // - `strippedBaseline` is `bufferToOpen` with the error block immediately
+  //   re-stripped — i.e. what the user would see as "their" content. We
+  //   compare against this to detect the "saved unchanged after seeing an
+  //   error" case (the retry-abort UX).
+  let bufferToOpen = initialBuffer;
+  let strippedBaseline = initialBuffer;
+  let isRetry = false;
+  let parsed: ReturnType<typeof parseBuffer>["task"] | null = null;
+
+  for (let attempt = 0; attempt < MAX_EDIT_RETRIES; attempt++) {
+    let editedContent: string;
+    try {
+      editedContent = runEditor(
+        bufferToOpen,
+        editorOverride !== undefined ? { editorOverride } : undefined,
+      );
+    } catch (err) {
+      fail((err as Error).message);
+    }
+
+    // Empty buffer: exit 0, no write. Works on first shot AND on retry.
+    if (editedContent.trim() === "") {
+      console.error("edit aborted (empty buffer)");
+      return;
+    }
+
+    // Strip any stale error block the user didn't clean up. This is the
+    // buffer we'll compare for unchanged / feed to the parser.
+    const userContent = stripErrorBlock(editedContent);
+
+    // Unchanged (byte-equal to baseline) → abort with appropriate message.
+    if (userContent === strippedBaseline) {
+      if (isRetry) {
+        console.error(
+          "edit aborted (no changes after error — did you mean to fix the issue?)",
+        );
+      } else {
+        console.error("edit aborted (no changes)");
+      }
+      return;
+    }
+
+    // Parse.
+    let parseResult;
+    try {
+      parseResult = parseBuffer(userContent);
+    } catch (err) {
+      if (dryRun) {
+        // --dry-run is single-shot: surface the error and exit 1.
+        fail((err as Error).message);
+      }
+      // Crontab-style: feed the error back in and re-open.
+      bufferToOpen = buildErrorBlock((err as Error).message) + userContent;
+      strippedBaseline = userContent;
+      isRetry = true;
+      continue;
+    }
+
+    // Emit parser warnings (once per successful parse).
+    for (const w of parseResult.warnings) {
+      console.error(`warning: ${w}`);
+    }
+
+    // Dependency-existence validation — batch-report every unknown id.
+    // AND cycle validation — reject a dependency graph that would cause
+    // the edited task to (transitively) depend on itself.
+    if (parseResult.task.dependencies.length > 0) {
+      const allIds = new Set<string>();
+      const depsById = new Map<string, string[]>();
+      for (const fp of discoverTaskFiles(cwd)) {
+        const d = readTasksFile(fp);
+        if (!d) continue;
+        for (const t of d.tasks) {
+          allIds.add(t.id);
+          depsById.set(t.id, t.dependencies);
+        }
+      }
+      const unknown = parseResult.task.dependencies.filter((id) => !allIds.has(id));
+      if (unknown.length > 0) {
+        const msg =
+          `Unknown dependency task ID(s): ${unknown.join(", ")}. ` +
+          `Each dependency must reference an existing task.`;
+        if (dryRun) {
+          fail(msg);
+        }
+        bufferToOpen = buildErrorBlock(msg) + userContent;
+        strippedBaseline = userContent;
+        isRetry = true;
+        continue;
+      }
+
+      // Overlay the edited deps onto the graph and DFS from taskId — if
+      // we can reach taskId again, the edit would introduce a cycle.
+      depsById.set(taskId, parseResult.task.dependencies);
+      const cyclePath = findCyclePath(taskId, depsById);
+      if (cyclePath) {
+        const msg =
+          `Cycle detected: ${cyclePath.join(" -> ")}. ` +
+          `A task cannot (transitively) depend on itself.`;
+        if (dryRun) {
+          fail(msg);
+        }
+        bufferToOpen = buildErrorBlock(msg) + userContent;
+        strippedBaseline = userContent;
+        isRetry = true;
+        continue;
+      }
+    }
+
+    parsed = parseResult.task;
+    break;
+  }
+
+  if (!parsed) {
+    fail(
+      `too many parse failures — ${MAX_EDIT_RETRIES} attempts exhausted; tasks.json unchanged`,
+    );
+  }
+
+  // --dry-run: single-shot, print diff against the originally-loaded task,
+  // and skip the lock check. tasks.json is never written.
+  if (dryRun) {
+    printEditDiff(task, parsed);
+    return;
+  }
+
+  // Optimistic lock: re-read the task from disk and compare hashes.
+  // --force skips the check and overwrites any concurrent change.
+  if (!force) {
+    const currentFiles = discoverTaskFiles(cwd);
+    let reloaded: Task | null = null;
+    for (const fp of currentFiles) {
+      const d = readTasksFile(fp);
+      if (!d) continue;
+      const t = d.tasks.find((x) => x.id === taskId);
+      if (t) {
+        reloaded = t;
+        break;
+      }
+    }
+    if (reloaded) {
+      const newHash = hashTask(reloaded);
+      if (openHash !== newHash) {
+        // Surface a field-level diff of the SERVER-SIDE change so the user
+        // sees exactly what they would overwrite by re-running with --force.
+        console.error("server-side changes detected:");
+        printEditDiffToStderr(task, {
+          title: reloaded.title,
+          priority: reloaded.priority,
+          labels: reloaded.labels,
+          dependencies: reloaded.dependencies,
+          description: reloaded.description,
+          design: reloaded.design,
+          acceptance: reloaded.acceptance,
+          notes: reloaded.notes,
+        });
+        fail(
+          "concurrent write detected. re-run with --force to overwrite, or exit-without-saving (already happened — no write occurred) to abort",
+        );
+      }
+    }
+  }
+
+  // Write via updateTask (honors the replaceAcceptance:[] patch).
+  try {
+    await updateTask(
+      taskId,
+      {
+        title: parsed.title,
+        priority: parsed.priority,
+        labels: parsed.labels,
+        dependencies: parsed.dependencies,
+        description: parsed.description,
+        design: parsed.design,
+        notes: parsed.notes,
+        addAcceptance: parsed.acceptance,
+        replaceAcceptance: true,
+      },
+      cwd,
+    );
+  } catch (err) {
+    fail((err as Error).message);
+  }
+
+  console.log(`Updated ${taskId}`);
+}
+
+/**
+ * DFS from `startId` through the dep graph. If any path loops back to
+ * `startId`, return it as `[startId, ..., startId]`. Returns null when
+ * the edited-in deps don't introduce a cycle.
+ *
+ * Unknown ids in `depsById` are treated as leaves (dep-existence check
+ * has already rejected those before this runs).
+ */
+function findCyclePath(
+  startId: string,
+  depsById: Map<string, string[]>,
+): string[] | null {
+  // Iterative DFS carrying path so we can report where the cycle closes.
+  const stack: Array<{ id: string; path: string[] }> = [];
+  const seeds = depsById.get(startId) ?? [];
+  for (const d of seeds) stack.push({ id: d, path: [startId, d] });
+  const visited = new Set<string>();
+
+  while (stack.length > 0) {
+    const { id, path } = stack.pop()!;
+    if (id === startId) return path;
+    if (visited.has(id)) continue;
+    visited.add(id);
+    const next = depsById.get(id);
+    if (!next) continue;
+    for (const n of next) stack.push({ id: n, path: [...path, n] });
+  }
+  return null;
+}
+
+interface ParsedForDiff {
+  title: string;
+  priority: number;
+  labels: string[];
+  dependencies: string[];
+  description: string;
+  design: string;
+  acceptance: string[];
+  notes: string;
+}
+
+/**
+ * Print a field-by-field `FIELD: <before> -> <after>` diff for every
+ * editable field whose value changed. Used by --dry-run (stdout) and
+ * by the optimistic-lock conflict report (stderr).
+ */
+function printEditDiff(before: Task, after: ParsedForDiff): void {
+  printEditDiffTo(before, after, console.log);
+}
+
+function printEditDiffToStderr(before: Task, after: ParsedForDiff): void {
+  printEditDiffTo(before, after, console.error);
+}
+
+function printEditDiffTo(
+  before: Task,
+  after: ParsedForDiff,
+  sink: (line: string) => void,
+): void {
+  const fmt = (v: unknown): string => {
+    if (Array.isArray(v)) return JSON.stringify(v);
+    if (v === "") return '""';
+    return String(v);
+  };
+  const checks: Array<[string, unknown, unknown]> = [
+    ["title", before.title, after.title],
+    ["priority", before.priority, after.priority],
+    ["labels", before.labels, after.labels],
+    ["dependencies", before.dependencies, after.dependencies],
+    ["description", before.description, after.description],
+    ["design", before.design, after.design],
+    ["acceptance", before.acceptance, after.acceptance],
+    ["notes", before.notes, after.notes],
+  ];
+  let changed = 0;
+  for (const [name, b, a] of checks) {
+    const bs = fmt(b);
+    const as = fmt(a);
+    if (bs === as) continue;
+    sink(`${name}: ${bs} -> ${as}`);
+    changed++;
+  }
+  if (changed === 0) {
+    sink("(no changes)");
   }
 }
 
