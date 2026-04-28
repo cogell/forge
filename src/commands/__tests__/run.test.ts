@@ -181,4 +181,33 @@ describe("forge run CLI", () => {
     expect(parsed).not.toBeNull();
     expect(parsed.epic).toBe("SK-5");
   });
+
+  it("feature-scoped JSON output contains literal epic and phase keys (AC #5 'regardless of flags')", async () => {
+    setupFeature(tmp, "auth");
+    try {
+      await run(["auth", "--json"]);
+    } catch {}
+    const logged = logSpy.mock.calls.map((c: any[]) => String(c[0]));
+    let parsed: any = null;
+    for (const line of logged) {
+      try {
+        const obj = JSON.parse(line);
+        if (
+          obj &&
+          typeof obj === "object" &&
+          "feature" in obj &&
+          obj.feature === "auth"
+        ) {
+          parsed = obj;
+          break;
+        }
+      } catch {}
+    }
+    expect(parsed).not.toBeNull();
+    // AC #5: literal keys must be present even when neither flag was supplied.
+    expect("epic" in parsed).toBe(true);
+    expect("phase" in parsed).toBe(true);
+    expect(parsed.epic).toBeNull();
+    expect(parsed.phase).toBeNull();
+  });
 });

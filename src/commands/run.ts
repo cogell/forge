@@ -69,18 +69,10 @@ export async function run(args: string[]): Promise<void> {
     process.exit(2);
   }
 
-  // Validate --phase numeric (applies regardless of whether feature is supplied,
-  // before we branch on feature presence — so 'forge run auth --phase abc' is
-  // rejected with a clear message).
-  if (phaseFlag !== null) {
-    const n = Number(phaseFlag);
-    if (!Number.isInteger(n)) {
-      console.error(`--phase requires an integer value (got '${phaseFlag}')`);
-      process.exit(1);
-    }
-  }
-
-  // Relax the no-feature guard.
+  // Relax the no-feature guard before numeric validation, so
+  // 'forge run --phase abc' (no feature) reports the more specific
+  // '--phase requires a feature positional' message rather than the
+  // generic integer-validation error.
   if (!feature) {
     if (epicFlag) {
       // --epic alone path: skip feature-scoped precondition checks entirely.
@@ -120,6 +112,15 @@ export async function run(args: string[]): Promise<void> {
     }
     console.error("Usage: forge run <feature-name>");
     process.exit(1);
+  }
+
+  // Validate --phase numeric (after no-feature relaxation per design order).
+  if (phaseFlag !== null) {
+    const n = Number(phaseFlag);
+    if (!Number.isInteger(n)) {
+      console.error(`--phase requires an integer value (got '${phaseFlag}')`);
+      process.exit(1);
+    }
   }
 
   // Feature-scoped path: feature is defined here.
