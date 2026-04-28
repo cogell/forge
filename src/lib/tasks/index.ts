@@ -46,6 +46,7 @@ export {
   addComment,
   addLabel,
   deleteTask,
+  ConcurrentWriteError,
   type DeletePreview,
 } from "./mutations";
 

@@ -1539,6 +1539,29 @@ describe("forge tasks CLI", () => {
       expect(helpText).toContain("--force");
     });
 
+    it("--json: success emits {status:'updated', id} on stdout instead of human text", async () => {
+      setupFeature(tmp, "auth", editFixture());
+      const filePath = join(tmp, "plans", "auth", TASKS_FILENAME);
+
+      const editor = transformEditor(
+        `(s) => s.replace('title: "Original title"', 'title: "Renamed"')`,
+      );
+
+      await tasks(["edit", "TEST-1.1", "--editor", editor, "--json"]);
+
+      // Stdout: JSON line with status + id; no plaintext "Updated" line.
+      const stdoutLines = logSpy.mock.calls.map((c: string[]) => c[0] ?? "");
+      const jsonLines = stdoutLines.filter((l: string) => l.startsWith("{"));
+      expect(jsonLines.length).toBeGreaterThan(0);
+      const parsed = JSON.parse(jsonLines[jsonLines.length - 1]);
+      expect(parsed).toEqual({ status: "updated", id: "TEST-1.1" });
+      expect(stdoutLines.some((l: string) => l.startsWith("Updated "))).toBe(false);
+
+      // Write actually happened.
+      const data = readJson(filePath);
+      expect(data.tasks[0].title).toBe("Renamed");
+    });
+
     // ── FORGE-4.4: retry loop + optimistic lock + --force ───
 
     it("concurrency conflict without --force exits 1 and preserves the concurrent write", async () => {

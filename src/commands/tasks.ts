@@ -30,6 +30,7 @@ import {
   hashTask,
   runEditor,
   assertInteractive,
+  ConcurrentWriteError,
   SCHEMA_VERSION,
   TASKS_FILENAME,
   PHASE_LABEL_PREFIX,
@@ -411,7 +412,7 @@ async function tasksInner(args: string[], json: boolean, project: boolean): Prom
       case "show": return handleShow(positional, args, json, cwd);
       case "ready": return handleReady(args, positional, json, cwd);
       case "delete": return handleDelete(positional, args, json, cwd);
-      case "edit": return handleEdit(args, positional, cwd);
+      case "edit": return handleEdit(args, positional, json, cwd);
       default:
         fail(`Subcommand "${subcommand}" is not yet implemented.`);
     }
@@ -1123,13 +1124,14 @@ function stripErrorBlock(buffer: string): string {
  *
  * FORGE-4.4 extends 4.3's happy path with:
  *   - crontab-style re-open loop on parse/dep-validation errors
- *   - optimistic lock on the reloaded task (skipped with --force)
+ *   - optimistic lock validated atomically inside updateTask's file lock
+ *     via expectedHash (skipped with --force)
  *   - batch dependency-existence validation
  *   - distinct retry-abort UX message
  *
  * --dry-run is single-shot: no retry loop, no lock check.
  */
-async function handleEdit(args: string[], positional: string[], cwd: string): Promise<void> {
+async function handleEdit(args: string[], positional: string[], json: boolean, cwd: string): Promise<void> {
   // 1. TTY/CI guard — fail fast before any editor spawn.
   try {
     assertInteractive();
@@ -1212,6 +1214,7 @@ async function handleEdit(args: string[], positional: string[], cwd: string): Pr
     // Empty buffer: exit 0, no write. Works on first shot AND on retry.
     if (editedContent.trim() === "") {
       console.error("edit aborted (empty buffer)");
+      if (json) console.log(JSON.stringify({ status: "aborted", reason: "empty-buffer" }));
       return;
     }
 
@@ -1225,8 +1228,10 @@ async function handleEdit(args: string[], positional: string[], cwd: string): Pr
         console.error(
           "edit aborted (no changes after error — did you mean to fix the issue?)",
         );
+        if (json) console.log(JSON.stringify({ status: "aborted", reason: "no-changes-after-error" }));
       } else {
         console.error("edit aborted (no changes)");
+        if (json) console.log(JSON.stringify({ status: "aborted", reason: "no-changes" }));
       }
       return;
     }
@@ -1312,47 +1317,14 @@ async function handleEdit(args: string[], positional: string[], cwd: string): Pr
   // and skip the lock check. tasks.json is never written.
   if (dryRun) {
     printEditDiff(task, parsed);
+    if (json) console.log(JSON.stringify({ status: "dry-run", id: taskId }));
     return;
   }
 
-  // Optimistic lock: re-read the task from disk and compare hashes.
-  // --force skips the check and overwrites any concurrent change.
-  if (!force) {
-    const currentFiles = discoverTaskFiles(cwd);
-    let reloaded: Task | null = null;
-    for (const fp of currentFiles) {
-      const d = readTasksFile(fp);
-      if (!d) continue;
-      const t = d.tasks.find((x) => x.id === taskId);
-      if (t) {
-        reloaded = t;
-        break;
-      }
-    }
-    if (reloaded) {
-      const newHash = hashTask(reloaded);
-      if (openHash !== newHash) {
-        // Surface a field-level diff of the SERVER-SIDE change so the user
-        // sees exactly what they would overwrite by re-running with --force.
-        console.error("server-side changes detected:");
-        printEditDiffToStderr(task, {
-          title: reloaded.title,
-          priority: reloaded.priority,
-          labels: reloaded.labels,
-          dependencies: reloaded.dependencies,
-          description: reloaded.description,
-          design: reloaded.design,
-          acceptance: reloaded.acceptance,
-          notes: reloaded.notes,
-        });
-        fail(
-          "concurrent write detected. re-run with --force to overwrite, or exit-without-saving (already happened — no write occurred) to abort",
-        );
-      }
-    }
-  }
-
-  // Write via updateTask (honors the replaceAcceptance:[] patch).
+  // Write via updateTask (honors the replaceAcceptance:[] patch). The
+  // optimistic-lock check happens INSIDE updateTask's file lock — passing
+  // expectedHash makes the check atomic with the write, closing the TOCTOU
+  // window. --force omits the hash so any concurrent change is overwritten.
   try {
     await updateTask(
       taskId,
@@ -1366,14 +1338,38 @@ async function handleEdit(args: string[], positional: string[], cwd: string): Pr
         notes: parsed.notes,
         addAcceptance: parsed.acceptance,
         replaceAcceptance: true,
+        ...(force ? {} : { expectedHash: openHash }),
       },
       cwd,
     );
   } catch (err) {
+    if (err instanceof ConcurrentWriteError) {
+      // Surface a field-level diff of the SERVER-SIDE change so the user
+      // sees exactly what they would overwrite by re-running with --force.
+      const reloaded = err.reloadedTask;
+      console.error("server-side changes detected:");
+      printEditDiffToStderr(task, {
+        title: reloaded.title,
+        priority: reloaded.priority,
+        labels: reloaded.labels,
+        dependencies: reloaded.dependencies,
+        description: reloaded.description,
+        design: reloaded.design,
+        acceptance: reloaded.acceptance,
+        notes: reloaded.notes,
+      });
+      fail(
+        "concurrent write detected. re-run with --force to overwrite, or exit-without-saving (already happened — no write occurred) to abort",
+      );
+    }
     fail((err as Error).message);
   }
 
-  console.log(`Updated ${taskId}`);
+  if (json) {
+    console.log(JSON.stringify({ status: "updated", id: taskId }));
+  } else {
+    console.log(`Updated ${taskId}`);
+  }
 }
 
 /**

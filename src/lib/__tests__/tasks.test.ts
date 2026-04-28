@@ -29,6 +29,8 @@ import {
   validateDag,
   resolveTasksPath,
   isValidPrefix,
+  hashTask,
+  ConcurrentWriteError,
 } from "../tasks";
 import type { TasksFile, Task, Epic, Comment, TaskStatus, EpicInfo, ReadyTask, ValidateScope } from "../tasks";
 
@@ -1468,6 +1470,49 @@ describe("updateTask", () => {
     await updateTask("FORGE-1.1", { replaceAcceptance: true, addAcceptance: [] }, tmpDir);
     const task = readJson(join(tmpDir, "plans", "auth", TASKS_FILENAME)).tasks[0];
     expect(task.acceptance).toEqual([]);
+  });
+
+  // ── Optimistic-lock revalidation (TOCTOU close) ───────────────────────
+
+  it("expectedHash mismatch throws ConcurrentWriteError and writes nothing", async () => {
+    const tasks: Task[] = [
+      { id: "FORGE-1.1", title: "Original", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: null },
+    ];
+    setupFeature(tmpDir, "auth", { version: 1, epics: [{ id: "FORGE-1", title: "Auth", created: "2026-03-30" }], tasks });
+    const filePath = join(tmpDir, "plans", "auth", TASKS_FILENAME);
+    const before = readFileSync(filePath, "utf-8");
+
+    await expect(
+      updateTask("FORGE-1.1", { title: "New", expectedHash: "deadbeef-not-the-real-hash" }, tmpDir),
+    ).rejects.toBeInstanceOf(ConcurrentWriteError);
+
+    // File is byte-identical: no write occurred.
+    expect(readFileSync(filePath, "utf-8")).toBe(before);
+  });
+
+  it("expectedHash matching the current task hash succeeds", async () => {
+    const task: Task = { id: "FORGE-1.1", title: "Original", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: null };
+    setupFeature(tmpDir, "auth", { version: 1, epics: [{ id: "FORGE-1", title: "Auth", created: "2026-03-30" }], tasks: [task] });
+    const goodHash = hashTask(task);
+
+    await updateTask("FORGE-1.1", { title: "New", expectedHash: goodHash }, tmpDir);
+
+    const written = readJson(join(tmpDir, "plans", "auth", TASKS_FILENAME)).tasks[0];
+    expect(written.title).toBe("New");
+  });
+
+  it("ConcurrentWriteError carries the in-lock reloaded task (for diff rendering)", async () => {
+    const task: Task = { id: "FORGE-1.1", title: "Server-side title", status: "open", priority: 2, labels: ["x"], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: null };
+    setupFeature(tmpDir, "auth", { version: 1, epics: [{ id: "FORGE-1", title: "Auth", created: "2026-03-30" }], tasks: [task] });
+
+    try {
+      await updateTask("FORGE-1.1", { title: "Editor title", expectedHash: "stale-hash" }, tmpDir);
+      throw new Error("expected ConcurrentWriteError");
+    } catch (err) {
+      expect(err).toBeInstanceOf(ConcurrentWriteError);
+      expect((err as ConcurrentWriteError).reloadedTask.title).toBe("Server-side title");
+      expect((err as ConcurrentWriteError).reloadedTask.labels).toEqual(["x"]);
+    }
   });
 });
 
