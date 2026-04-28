@@ -437,7 +437,7 @@
     {
       "id": "FORGE-5.4",
       "title": "skill: plugin/commands/run.md — consume new precondition JSON",
-      "status": "open",
+      "status": "closed",
       "priority": 2,
       "labels": [
         "complexity:4",
@@ -461,7 +461,7 @@
         "FORGE-5.3"
       ],
       "comments": [],
-      "closeReason": null
+      "closeReason": "Skill markdown updated; 5 grep tests verify literal substrings + COMMIT_PLAN_TEMPLATE cross-check. Manual QA: dirty-detection behavior verified via helper-direct tests (real /forge:run invocation requires rebuilt forge binary)."
     }
   ]
 }

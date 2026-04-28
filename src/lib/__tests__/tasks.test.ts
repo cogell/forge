@@ -32,6 +32,7 @@ import {
   isValidPrefix,
   hashTask,
   ConcurrentWriteError,
+  COMMIT_PLAN_TEMPLATE,
 } from "../tasks";
 import type { TasksFile, Task, Epic, Comment, TaskStatus, EpicInfo, ReadyTask, ValidateScope } from "../tasks";
 
@@ -2627,5 +2628,51 @@ describe("deleteTask", () => {
 
     const preview = await deleteTask("FORGE-1.1", { confirm: false }, tmpDir);
     expect(preview!.descendants).toEqual([]);
+  });
+});
+
+// ─── plugin/commands/run.md skill-spec contract (FORGE-5.4) ──────────
+describe("plugin/commands/run.md skill spec — FORGE-5.4 contract", () => {
+  const skillPath = join(import.meta.dir, "..", "..", "..", "plugin", "commands", "run.md");
+  const skillSrc = readFileSync(skillPath, "utf-8");
+
+  it("references all five precondition JSON keys verbatim (AC #1)", () => {
+    expect(skillSrc).toContain("epic");
+    expect(skillSrc).toContain("phase");
+    expect(skillSrc).toContain("suggestedPhase");
+    expect(skillSrc).toContain("suggestedPhaseDiagnostic");
+    expect(skillSrc).toContain("planningArtifactsDirty");
+  });
+
+  it("explains the commit step that fires when planningArtifactsDirty is true (AC #2)", () => {
+    expect(skillSrc).toContain("planningArtifactsDirty");
+    // The commit step uses git add + git commit on the planning files.
+    expect(skillSrc).toMatch(/git add plans\/<feature>\/plan\.md plans\/<feature>\/tasks\.json/);
+  });
+
+  it("references COMMIT_PLAN_TEMPLATE by constant name and shows its live value (AC #3)", () => {
+    expect(skillSrc).toContain("COMMIT_PLAN_TEMPLATE");
+    // Cross-check the worked example against the constant's current value, so
+    // that wording polish on either side cannot silently drift from the other.
+    expect(skillSrc).toContain(COMMIT_PLAN_TEMPLATE);
+  });
+
+  it("describes the four-branch phase-resolution priority (AC #4)", () => {
+    // Branch 1: epic non-null → dispatch with --epic, skip phase resolution.
+    expect(skillSrc).toMatch(/`epic` is non-null/);
+    expect(skillSrc).toMatch(/skip phase resolution/);
+    // Branch 2: explicit --phase value.
+    expect(skillSrc).toMatch(/`phase` is non-null/);
+    // Branch 3: suggestedPhase fallback.
+    expect(skillSrc).toMatch(/`suggestedPhase` is non-null/);
+    // Branch 4: stop and print the diagnostic verbatim.
+    expect(skillSrc).toMatch(/print `?suggestedPhaseDiagnostic`? verbatim/i);
+  });
+
+  it("calls out that --epic alone must NOT fabricate a feature/phase commit (AC #5)", () => {
+    // The skill must explicitly state the no-commit behavior for --epic-alone.
+    // Tolerate markdown formatting (e.g. backticks around `--epic`).
+    expect(skillSrc).toMatch(/--epic`?\s+alone/);
+    expect(skillSrc).toMatch(/MUST NOT.*commit/i);
   });
 });

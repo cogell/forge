@@ -22,6 +22,47 @@ Run `forge run $ARGUMENTS` to validate preconditions and see the execution plan.
    - `phase-prs` → one PR per phase, stop after each for human review
    - `single-pr` → one branch, one PR at the end
 4. **Create feature branch:** `git checkout -b feat/<feature>`
+5. **Consume the precondition JSON** (`forge run <feature> --json`).
+
+### Phase 0.5: Read the precondition JSON
+
+Run `forge run <feature> --json` and read these top-level keys from the output object:
+
+| Key | Type | Meaning |
+|---|---|---|
+| `epic` | string \| null | Explicit `--epic` flag value, if supplied. |
+| `phase` | number \| null | Explicit `--phase` flag value, if supplied. |
+| `suggestedPhase` | number \| null | Auto-detected lowest open phase from `nextOpenPhase(feature)`. `null` if `--epic` was supplied (auto-detect skipped) or if no phase resolves. |
+| `suggestedPhaseDiagnostic` | string \| null | Halt or skip explanation when `suggestedPhase` is `null`. Pass through verbatim to the user when no phase resolves. |
+| `planningArtifactsDirty` | boolean | True when `plans/<feature>/plan.md` or `plans/<feature>/tasks.json` is dirty in git. The skill commits these before starting the task loop. |
+
+#### Step A — Commit dirty planning artifacts (if `planningArtifactsDirty: true`)
+
+Stage and commit the planning files using the format defined by the `COMMIT_PLAN_TEMPLATE` constant in `src/lib/tasks/types.ts`. The constant currently resolves to:
+
+```
+chore(<feature>): add Phase <N> plan + tasks
+```
+
+Substitute `<feature>` with the feature name and `<N>` with the resolved phase number (from Step B).
+
+```bash
+git add plans/<feature>/plan.md plans/<feature>/tasks.json
+git commit -m "chore(<feature>): add Phase <N> plan + tasks"
+```
+
+**Special case — `--epic` alone (no feature positional):** The CLI emits `planningArtifactsDirty: false` for this case (no path scope is available). The skill MUST NOT attempt to commit planning artifacts, MUST NOT fabricate a `<feature>` or `<N>` substitution, and MUST proceed directly to Step B's epic-dispatch branch.
+
+#### Step B — Resolve which phase to run (four explicit branches)
+
+1. **If `epic` is non-null** → dispatch with `--epic <id>` and skip phase resolution entirely. The epic ID is project-wide unique via `.epic-lock`.
+2. **Else if `phase` is non-null** (the user supplied `--phase <N>` explicitly) → use that exact integer for the task loop and for any commit-message `<N>` substitution.
+3. **Else if `suggestedPhase` is non-null** → use that integer (the auto-detect picked the lowest open phase).
+4. **Else** → stop and print `suggestedPhaseDiagnostic` verbatim to the user. Do not start the task loop. Common diagnostics:
+   - `"all phases closed for this feature"` — nothing to do.
+   - `"phase N has in-progress tasks — resume explicitly via --phase N or close them first"` — user must resume manually.
+   - `"no tasks.json found for feature"` — run `/forge:tasks` first.
+   - `"--epic supplied explicitly; phase auto-detect skipped"` — only fires when `epic` is also non-null, so branch (1) handles it before we reach here.
 
 ### Phase 1-N: Execute Each Plan Phase
 
