@@ -8,7 +8,6 @@
  *
  *   # id: FORGE-42
  *   # status: open
- *   # created: <iso-or-unknown>
  *   # closeReason: <null | string>
  *   # comments-count: <n>
  *   # (reference-only; these lines are not parsed back into the task)
@@ -57,7 +56,7 @@ export interface ParseResult {
 // ─── Constants ────────────────────────────────────────────────────────
 
 const EDITABLE_KEYS = new Set(["title", "priority", "labels", "dependencies"]);
-const RESERVED_KEYS = new Set(["id", "status", "created", "closeReason", "comments"]);
+const RESERVED_KEYS = new Set(["id", "status", "closeReason", "comments"]);
 const SECTION_HEADERS = ["## Description", "## Design", "## Acceptance", "## Notes"] as const;
 type SectionName = "description" | "design" | "acceptance" | "notes";
 const HEADER_TO_NAME: Record<string, SectionName> = {
@@ -84,10 +83,6 @@ export function renderBuffer(task: Task): string {
   // Reference-only header block (non-editable fields).
   lines.push(`# id: ${task.id}`);
   lines.push(`# status: ${task.status}`);
-  // `created` is not on the Task type today; render as unknown so the shape
-  // stays stable. Future fields can be added here without affecting parse.
-  const created = (task as unknown as { created?: string }).created ?? "";
-  lines.push(`# created: ${created}`);
   lines.push(`# closeReason: ${task.closeReason === null ? "null" : task.closeReason}`);
   lines.push(`# comments-count: ${task.comments.length}`);
   lines.push(REFERENCE_INSTRUCTION);
@@ -340,8 +335,11 @@ function parseAcceptance(body: string): { items: string[]; hadChecked: boolean }
     const m = line.match(re);
     if (!m) continue;
     const state = m[1];
+    const text = m[2].trimEnd();
+    // Skip empty-body checkboxes (e.g. a stray `- [ ]` left after editing).
+    if (text === "") continue;
     if (state === "x" || state === "X") hadChecked = true;
-    items.push(m[2].trimEnd());
+    items.push(text);
   }
   return { items, hadChecked };
 }

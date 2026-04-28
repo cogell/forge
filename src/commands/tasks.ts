@@ -239,7 +239,9 @@ Arguments:
 Options:
   --editor <cmd>  Editor command to use (overrides $VISUAL/$EDITOR/'vi')
   --dry-run       Show field-by-field diff; do not write tasks.json
-  --force         Reserved for conflict override (see FORGE-4.4); no-op here
+  --force         Skip the optimistic-lock check and overwrite a concurrent
+                  write to the same task. Without --force, a server-side
+                  change since you opened the editor aborts with a diff.
   --json          Output as JSON
   --help, -h      Show this help
 

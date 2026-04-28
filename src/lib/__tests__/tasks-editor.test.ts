@@ -44,7 +44,6 @@ describe("renderBuffer", () => {
     expect(out).toMatch(/^# /); // leading comment block
     expect(out).toContain("# id: FORGE-42");
     expect(out).toContain("# status: in_progress");
-    expect(out).toContain("# created:");
     expect(out).toContain("# closeReason:");
     expect(out).toContain("# comments-count:");
     // Instruction line noting reference-only
@@ -177,7 +176,7 @@ describe("parseBuffer", () => {
   });
 
   it("throws tailored error for reserved non-editable keys in frontmatter", () => {
-    const reserved = ["id", "status", "created", "closeReason", "comments"] as const;
+    const reserved = ["id", "status", "closeReason", "comments"] as const;
     for (const key of reserved) {
       const bad = [
         "---",
