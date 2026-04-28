@@ -10,6 +10,7 @@ import { resolveRepoRoot } from "../worktree";
 import type { Task, TasksFile, TaskStatus } from "./types";
 import { MAX_NESTING_DEPTH, SCHEMA_VERSION, TASKS_FILENAME } from "./types";
 import { readProjectPrefix } from "./config";
+import { hashTask } from "./editor";
 import {
   discoverTaskFilesFromRoot,
   findTaskInRoot,
@@ -19,6 +20,23 @@ import {
   resolveTasksPath,
   writeTasksFileRaw,
 } from "./io";
+
+/**
+ * Thrown by updateTask when the optimistic-lock token (expectedHash) doesn't
+ * match the hash of the in-lock reloaded task — i.e. the task changed between
+ * the caller's read and the locked write.
+ *
+ * Carries the reloaded task so callers (e.g. `forge tasks edit`) can render a
+ * field-level diff of the server-side change.
+ */
+export class ConcurrentWriteError extends Error {
+  reloadedTask: Task;
+  constructor(reloadedTask: Task) {
+    super("concurrent write detected");
+    this.name = "ConcurrentWriteError";
+    this.reloadedTask = reloadedTask;
+  }
+}
 
 /**
  * Write a TasksFile to disk with canonical JSON formatting.
@@ -397,6 +415,25 @@ export async function updateTask(
      * the acceptance field (existing criteria are preserved).
      */
     replaceAcceptance?: boolean;
+    /**
+     * Full-replace labels[]. Used by `forge tasks edit` (FORGE-4.3) where
+     * the editor buffer represents the complete desired label set. Prefer
+     * `addLabels` for CLI-style append semantics.
+     */
+    labels?: string[];
+    /**
+     * Full-replace dependencies[]. Used by `forge tasks edit` (FORGE-4.3)
+     * where the editor buffer represents the complete desired dependency
+     * set. Prefer `addDep`/`removeDep` for CLI-style one-at-a-time edits.
+     */
+    dependencies?: string[];
+    /**
+     * Optimistic-lock token. When provided, the in-lock reloaded task is
+     * hashed and compared against this value; on mismatch a
+     * ConcurrentWriteError is thrown before any write occurs. This closes
+     * the TOCTOU window between the caller's read and the locked write.
+     */
+    expectedHash?: string;
   },
   cwd?: string
 ): Promise<void> {
@@ -411,24 +448,32 @@ export async function updateTask(
     const { data, taskIndex } = reloadTask(filePath, id);
     const task = data.tasks[taskIndex];
 
+    if (fields.expectedHash !== undefined && hashTask(task) !== fields.expectedHash) {
+      throw new ConcurrentWriteError(task);
+    }
+
     if (fields.status !== undefined) task.status = fields.status;
     if (fields.priority !== undefined) task.priority = fields.priority;
     if (fields.title !== undefined) task.title = fields.title;
     if (fields.description !== undefined) task.description = fields.description;
     if (fields.design !== undefined) task.design = fields.design;
     if (fields.notes !== undefined) task.notes = fields.notes;
-    if (fields.addAcceptance && fields.addAcceptance.length > 0) {
-      if (fields.replaceAcceptance) {
-        task.acceptance = [...fields.addAcceptance];
-      } else {
-        for (const ac of fields.addAcceptance) task.acceptance.push(ac);
-      }
+    if (fields.replaceAcceptance && fields.addAcceptance !== undefined) {
+      // Honor replaceAcceptance even when the caller passes an empty array —
+      // this lets `forge tasks edit` clear all acceptance criteria in a
+      // single updateTask() call. Without addAcceptance at all, the flag is
+      // a no-op (preserves existing behavior).
+      task.acceptance = [...fields.addAcceptance];
+    } else if (fields.addAcceptance && fields.addAcceptance.length > 0) {
+      for (const ac of fields.addAcceptance) task.acceptance.push(ac);
     }
     if (fields.addLabels) {
       for (const lbl of fields.addLabels) {
         if (!task.labels.includes(lbl)) task.labels.push(lbl);
       }
     }
+    if (fields.labels !== undefined) task.labels = [...fields.labels];
+    if (fields.dependencies !== undefined) task.dependencies = [...fields.dependencies];
 
     if (task.status === "open") task.closeReason = null;
 

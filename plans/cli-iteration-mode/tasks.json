@@ -209,7 +209,7 @@
     {
       "id": "FORGE-4.1",
       "title": "Editor module — buffer render, parse, hash, and roundtrip fixture",
-      "status": "open",
+      "status": "closed",
       "priority": 1,
       "labels": [
         "complexity:6",
@@ -236,12 +236,12 @@
       "notes": "Files: src/lib/tasks/editor.ts (create), src/lib/tasks/index.ts (modify — re-export), src/lib/__tests__/fixtures/tasks-roundtrip.json (create), src/lib/__tests__/tasks-editor.test.ts (create — flat file, NOT a nested __tests__ dir).\n\nYAML parsing: use 'gray-matter' (already in package.json deps). gray-matter parses frontmatter natively and handles YAML via its bundled parser — do NOT add js-yaml as a new dep. For the body (post-frontmatter markdown), split sections with a simple regex on /^## /m — no markdown parser needed for Phase 2.\n\nScope-sizing note: this task is at the upper bound of complexity 6. If during implementation it feels larger (e.g., the fixture becomes a combinatorial explosion or parse error cases multiply), the implementing agent MAY decompose into two subtasks: (a) render + hash + barrel export; (b) parse + fixture + roundtrip test. Decide at RED-phase when the test count becomes unwieldy — do not rewrite work.",
       "dependencies": [],
       "comments": [],
-      "closeReason": null
+      "closeReason": "completed"
     },
     {
       "id": "FORGE-4.2",
       "title": "Editor subprocess helper — spawn, TTY/CI guard, tempfile management",
-      "status": "open",
+      "status": "closed",
       "priority": 1,
       "labels": [
         "complexity:3",
@@ -267,12 +267,12 @@
         "FORGE-4.1"
       ],
       "comments": [],
-      "closeReason": null
+      "closeReason": "completed"
     },
     {
       "id": "FORGE-4.3",
       "title": "forge tasks edit — core flow, dispatcher, and --dry-run",
-      "status": "open",
+      "status": "closed",
       "priority": 2,
       "labels": [
         "complexity:5",
@@ -306,12 +306,12 @@
         "FORGE-4.2"
       ],
       "comments": [],
-      "closeReason": null
+      "closeReason": "completed"
     },
     {
       "id": "FORGE-4.4",
       "title": "forge tasks edit robustness — crontab re-open, optimistic lock, --force",
-      "status": "open",
+      "status": "closed",
       "priority": 2,
       "labels": [
         "complexity:5",
@@ -339,7 +339,7 @@
         "FORGE-4.3"
       ],
       "comments": [],
-      "closeReason": null
+      "closeReason": "completed"
     }
   ]
 }
