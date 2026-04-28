@@ -405,7 +405,7 @@
     {
       "id": "FORGE-5.3",
       "title": "run.ts: precondition JSON — planningArtifactsDirty + suggestedPhase + diagnostic",
-      "status": "open",
+      "status": "closed",
       "priority": 1,
       "labels": [
         "complexity:5",
@@ -432,7 +432,7 @@
         "FORGE-5.2"
       ],
       "comments": [],
-      "closeReason": null
+      "closeReason": "Implemented; helper exported with injectable runner; 11 new tests (6 helper-direct, 5 integration); all FORGE-5.3 ACs covered"
     },
     {
       "id": "FORGE-5.4",

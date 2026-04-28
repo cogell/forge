@@ -14,7 +14,45 @@
 
 import { existsSync } from "fs";
 import { join } from "path";
-import { queryFeatureTasks, readProjectPrefix } from "../lib/tasks";
+import { queryFeatureTasks, readProjectPrefix, nextOpenPhase } from "../lib/tasks";
+
+/**
+ * Pluggable git runner — kept narrow on purpose so tests can inject a stub
+ * without spinning up a real git fixture. Production wiring uses {@link defaultGitRun}.
+ */
+export type GitRunner = (args: string[], cwd: string) => Promise<{ stdout: string }>;
+
+export const defaultGitRun: GitRunner = async (args, cwd) => {
+  try {
+    const proc = Bun.spawn(["git", ...args], { cwd, stdout: "pipe", stderr: "pipe" });
+    const stdout = await new Response(proc.stdout).text();
+    await proc.exited;
+    return { stdout };
+  } catch {
+    return { stdout: "" };
+  }
+};
+
+/**
+ * Detect whether plans/<feature>/plan.md or plans/<feature>/tasks.json have
+ * uncommitted changes. Uses `git status --porcelain` scoped to those two paths,
+ * so unrelated dirty files (or a missing feature directory) yield `false`.
+ */
+export async function detectDirtyPlanningArtifacts(
+  feature: string,
+  cwd: string,
+  run: GitRunner = defaultGitRun,
+): Promise<boolean> {
+  const planPath = join("plans", feature, "plan.md");
+  const tasksPath = join("plans", feature, "tasks.json");
+  const { stdout } = await run(
+    ["status", "--porcelain", "--", planPath, tasksPath],
+    cwd,
+  );
+  return stdout.trim().length > 0;
+}
+
+const EPIC_SKIP_DIAGNOSTIC = "--epic supplied explicitly; phase auto-detect skipped";
 
 interface ParsedArgs {
   feature: string | undefined;
@@ -75,34 +113,24 @@ export async function run(args: string[]): Promise<void> {
   // generic integer-validation error.
   if (!feature) {
     if (epicFlag) {
-      // --epic alone path: skip feature-scoped precondition checks entirely.
-      const cwd = process.cwd();
-      let forgeConfigured = false;
-      try {
-        readProjectPrefix(cwd);
-        forgeConfigured = true;
-      } catch {
-        forgeConfigured = false;
-      }
-
-      const meta = {
-        forgeConfigured,
-        gitClean: await isGitClean(),
-      };
-
+      // --epic alone path (case a): skip feature-scoped precondition checks.
       const phaseValue = phaseFlag !== null ? Number(phaseFlag) : null;
       const payload = {
+        status: "ready",
+        feature: null,
         epic: epicFlag,
         phase: phaseValue,
-        ...meta,
+        planningArtifactsDirty: false,
+        suggestedPhase: null,
+        suggestedPhaseDiagnostic: EPIC_SKIP_DIAGNOSTIC,
       };
-
       if (json) {
         console.log(JSON.stringify(payload));
       } else {
-        console.log(`Epic:    ${epicFlag}`);
-        if (phaseValue !== null) console.log(`Phase:   ${phaseValue}`);
-        console.log(`Git:     ${meta.gitClean ? "clean" : "dirty (will stash)"}`);
+        console.log(`Epic:     ${epicFlag}`);
+        if (phaseValue !== null) console.log(`--phase:  ${phaseValue}`);
+        console.log(`Planning: ${payload.planningArtifactsDirty ? "dirty" : "clean"}`);
+        console.log(`Phase:    none — ${payload.suggestedPhaseDiagnostic}`);
       }
       return;
     }
@@ -174,6 +202,19 @@ export async function run(args: string[]): Promise<void> {
 
   const phaseValue = phaseFlag !== null ? Number(phaseFlag) : null;
 
+  // Compute Phase 3 fields. --epic short-circuits the auto-detect.
+  const planningArtifactsDirty = await detectDirtyPlanningArtifacts(feature, cwd);
+  let suggestedPhase: number | null;
+  let suggestedPhaseDiagnostic: string | null;
+  if (epicFlag) {
+    suggestedPhase = null;
+    suggestedPhaseDiagnostic = EPIC_SKIP_DIAGNOSTIC;
+  } else {
+    const result = nextOpenPhase(feature, cwd);
+    suggestedPhase = result.phase;
+    suggestedPhaseDiagnostic = result.diagnostic;
+  }
+
   if (json) {
     console.log(
       JSON.stringify({
@@ -183,6 +224,9 @@ export async function run(args: string[]): Promise<void> {
         phase: phaseValue,
         checks,
         steps,
+        planningArtifactsDirty,
+        suggestedPhase,
+        suggestedPhaseDiagnostic,
       }),
     );
   } else {
@@ -194,6 +238,12 @@ export async function run(args: string[]): Promise<void> {
     if (phaseValue !== null) console.log(`--phase: ${phaseValue}`);
     console.log(`Git:     ${checks.gitClean ? "clean" : "dirty (will stash)"}`);
     console.log(`\nPipeline steps: ${steps.join(" → ")}`);
+    console.log(`Planning: ${planningArtifactsDirty ? "dirty" : "clean"}`);
+    if (suggestedPhase !== null) {
+      console.log(`Phase:    ${suggestedPhase} (suggested)`);
+    } else {
+      console.log(`Phase:    none — ${suggestedPhaseDiagnostic}`);
+    }
   }
 }
 
