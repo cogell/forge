@@ -16,6 +16,7 @@ import {
   queryFeatureTasks,
   getReadyTasks,
   getDescendants,
+  nextOpenPhase,
   writeTasksFile,
   createEpic,
   createTask,
@@ -891,6 +892,194 @@ describe("getDescendants", () => {
 
     const result = getDescendants("FORGE-3", "direct", tmpDir);
     expect(result.map((t) => t.id)).toEqual(["FORGE-3.1", "FORGE-3.2"]);
+  });
+});
+
+// ─── nextOpenPhase ──────────────────────────────────────────────────
+describe("nextOpenPhase", () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = makeTmpDir();
+    mkdirSync(join(tmpDir, ".git"), { recursive: true });
+  });
+
+  afterEach(() => {
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("returns lowest phase with open work when earlier phases are closed", () => {
+    const data = makeTasksFile(
+      [{ id: "FORGE-1", title: "Epic", created: "2026-04-28" }],
+      [
+        makeTask({ id: "FORGE-1.1", title: "P1 done", status: "closed", labels: ["phase:1"] }),
+        makeTask({ id: "FORGE-1.2", title: "P1 done 2", status: "closed", labels: ["phase:1"] }),
+        makeTask({ id: "FORGE-1.3", title: "P2 open", status: "open", labels: ["phase:2"] }),
+        makeTask({ id: "FORGE-1.4", title: "P2 closed", status: "closed", labels: ["phase:2"] }),
+      ],
+    );
+    writePlansDir(tmpDir, { "my-feature": data });
+
+    const result = nextOpenPhase("my-feature", tmpDir);
+    expect(result).toEqual({ phase: 2, diagnostic: null });
+  });
+
+  it("returns halt diagnostic when lowest non-closed phase has in_progress tasks", () => {
+    const data = makeTasksFile(
+      [{ id: "FORGE-1", title: "Epic", created: "2026-04-28" }],
+      [
+        makeTask({ id: "FORGE-1.1", title: "P1 closed", status: "closed", labels: ["phase:1"] }),
+        makeTask({ id: "FORGE-1.2", title: "P2 in progress", status: "in_progress", labels: ["phase:2"] }),
+        makeTask({ id: "FORGE-1.3", title: "P2 open", status: "open", labels: ["phase:2"] }),
+      ],
+    );
+    writePlansDir(tmpDir, { "my-feature": data });
+
+    const result = nextOpenPhase("my-feature", tmpDir);
+    expect(result.phase).toBeNull();
+    expect(result.diagnostic).toContain("has in-progress tasks — resume explicitly via --phase");
+    expect(result.diagnostic).toContain("2");
+  });
+
+  it("returns 'all phases closed' when every phase task is closed", () => {
+    const data = makeTasksFile(
+      [{ id: "FORGE-1", title: "Epic", created: "2026-04-28" }],
+      [
+        makeTask({ id: "FORGE-1.1", title: "P1 done", status: "closed", labels: ["phase:1"] }),
+        makeTask({ id: "FORGE-1.2", title: "P2 done", status: "closed", labels: ["phase:2"] }),
+      ],
+    );
+    writePlansDir(tmpDir, { "my-feature": data });
+
+    const result = nextOpenPhase("my-feature", tmpDir);
+    expect(result).toEqual({ phase: null, diagnostic: "all phases closed for this feature" });
+  });
+
+  it("returns 'no tasks.json found' when feature directory does not exist", () => {
+    // No plans/<feature>/tasks.json at all
+    const result = nextOpenPhase("missing-feature", tmpDir);
+    expect(result).toEqual({ phase: null, diagnostic: "no tasks.json found for feature" });
+  });
+
+  it("ignores tasks with no phase:* label and treats multi-phase tasks per-phase", () => {
+    const data = makeTasksFile(
+      [{ id: "FORGE-1", title: "Epic", created: "2026-04-28" }],
+      [
+        // No phase label — must be ignored entirely.
+        makeTask({ id: "FORGE-1.1", title: "Unlabelled open", status: "open", labels: [] }),
+        // Has both phase:2 and phase:3. With status "open", it makes phase 2
+        // the lowest open phase.
+        makeTask({
+          id: "FORGE-1.2",
+          title: "Multi-phase",
+          status: "open",
+          labels: ["phase:2", "phase:3"],
+        }),
+      ],
+    );
+    writePlansDir(tmpDir, { "my-feature": data });
+
+    const result = nextOpenPhase("my-feature", tmpDir);
+    expect(result).toEqual({ phase: 2, diagnostic: null });
+  });
+
+  it("multi-phase task: closed in phase 2 still counts as open when phase 3 set has open work", () => {
+    // The same task carries phase:2 and phase:3 labels. Closed status means
+    // phase 2's set has only that one (closed) task; phase 3's set also has
+    // only that one (closed) task. Add a separate phase:3 open task to
+    // verify phase 3 surfaces as open.
+    const data = makeTasksFile(
+      [{ id: "FORGE-1", title: "Epic", created: "2026-04-28" }],
+      [
+        makeTask({
+          id: "FORGE-1.1",
+          title: "Multi-phase closed",
+          status: "closed",
+          labels: ["phase:2", "phase:3"],
+        }),
+        makeTask({
+          id: "FORGE-1.2",
+          title: "Phase 3 open",
+          status: "open",
+          labels: ["phase:3"],
+        }),
+      ],
+    );
+    writePlansDir(tmpDir, { "my-feature": data });
+
+    const result = nextOpenPhase("my-feature", tmpDir);
+    // Phase 2's set: just the closed task → continue.
+    // Phase 3's set: closed task + open task → return phase 3.
+    expect(result).toEqual({ phase: 3, diagnostic: null });
+  });
+
+  it("discards label corner cases: 'phase:' empty value and 'phase:abc' non-numeric, parses 'phase:01' as 1", () => {
+    const data = makeTasksFile(
+      [{ id: "FORGE-1", title: "Epic", created: "2026-04-28" }],
+      [
+        // Discarded: empty value
+        makeTask({ id: "FORGE-1.1", title: "Empty phase value", status: "open", labels: ["phase:"] }),
+        // Discarded: non-numeric value
+        makeTask({ id: "FORGE-1.2", title: "Non-numeric", status: "open", labels: ["phase:abc"] }),
+        // Parses to 1 via parseInt
+        makeTask({ id: "FORGE-1.3", title: "Zero-padded", status: "open", labels: ["phase:01"] }),
+      ],
+    );
+    writePlansDir(tmpDir, { "my-feature": data });
+
+    const result = nextOpenPhase("my-feature", tmpDir);
+    expect(result).toEqual({ phase: 1, diagnostic: null });
+  });
+
+  it("ascending scan: phases 1, 2 closed; phase 3 has open work → returns 3", () => {
+    const data = makeTasksFile(
+      [{ id: "FORGE-1", title: "Epic", created: "2026-04-28" }],
+      [
+        makeTask({ id: "FORGE-1.1", title: "P1", status: "closed", labels: ["phase:1"] }),
+        makeTask({ id: "FORGE-1.2", title: "P2", status: "closed", labels: ["phase:2"] }),
+        makeTask({ id: "FORGE-1.3", title: "P3 open", status: "open", labels: ["phase:3"] }),
+      ],
+    );
+    writePlansDir(tmpDir, { "my-feature": data });
+
+    const result = nextOpenPhase("my-feature", tmpDir);
+    expect(result).toEqual({ phase: 3, diagnostic: null });
+  });
+
+  it("empty feature (tasks.json with zero tasks) → 'all phases closed' via exhaustion", () => {
+    const data = makeTasksFile(
+      [{ id: "FORGE-1", title: "Empty", created: "2026-04-28" }],
+      [],
+    );
+    writePlansDir(tmpDir, { "my-feature": data });
+
+    const result = nextOpenPhase("my-feature", tmpDir);
+    expect(result).toEqual({ phase: null, diagnostic: "all phases closed for this feature" });
+  });
+
+  it("uses PHASE_LABEL_PREFIX constant (not hardcoded 'phase:') in implementation", () => {
+    // Read the implementation source and assert it references PHASE_LABEL_PREFIX.
+    // This locks the contract from the spec's acceptance criterion #9.
+    const queriesSrc = readFileSync(
+      join(import.meta.dir, "..", "tasks", "queries.ts"),
+      "utf-8",
+    );
+    expect(queriesSrc).toContain("PHASE_LABEL_PREFIX");
+  });
+
+  it("in_progress diagnostic mentions the specific phase number", () => {
+    const data = makeTasksFile(
+      [{ id: "FORGE-1", title: "Epic", created: "2026-04-28" }],
+      [
+        makeTask({ id: "FORGE-1.1", title: "P3 in progress", status: "in_progress", labels: ["phase:3"] }),
+      ],
+    );
+    writePlansDir(tmpDir, { "my-feature": data });
+
+    const result = nextOpenPhase("my-feature", tmpDir);
+    expect(result.phase).toBeNull();
+    expect(result.diagnostic).toContain("phase 3 has in-progress tasks");
+    expect(result.diagnostic).toContain("--phase 3");
   });
 });
 
