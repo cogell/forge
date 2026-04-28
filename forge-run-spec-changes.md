@@ -125,6 +125,69 @@ Make review-skip explicit. Tier:
 
 ---
 
+## P2 — Possible cross-tree state bleed (one observation, not reproduced)
+
+### Observed
+
+During the `/forge:run cli-iteration-mode --phase 3` autopilot session (FORGE-5.2), the worktree agent for FORGE-5.2 returned PASS at commit `9768ac4` in its worktree branch. ~2 minutes later, when I ran `git status` in the main repo to set up the cherry-pick, the main repo at `/Users/cogell/projects/cogell/forge` showed staged changes for the same files the agent worked on:
+
+```
+On branch feat/cli-iteration-mode-phase-3
+Changes to be committed:
+  new file:   src/commands/__tests__/run.test.ts
+  modified:   src/commands/run.ts
+```
+
+The staged content was byte-identical to the agent's first commit. Main repo working tree files had also been updated, with mtimes ~2 minutes after the agent commit. The agent's worktree itself was correct; this was an *additional* leak of the agent's work into the main repo's index and working tree.
+
+### Cost on the original session
+
+When I tried `git cherry-pick 9768ac4`, git rejected with "your local changes would be overwritten by cherry-pick." Recovery: `git reset HEAD <files>` + `git checkout HEAD -- <files>` + `rm <new files>` before the cherry-pick could proceed. ~3 minutes of debugging to identify what had happened.
+
+### Spike — three controlled patterns, none reproduced the bleed
+
+A focused 30-minute spike attempted reproduction in isolation. Each variation captured pre/post `git status --porcelain`, `.git/index` SHA, and file MD5s in the main repo immediately after agent return:
+
+| Variation | What the agent did | Main repo after |
+|---|---|---|
+| A | Created a new file (`SPIKE-A-MARKER.txt`), staged, committed | Clean. No file, no staging, index SHA unchanged. |
+| B' | Modified existing `README.md`, staged, committed | Clean. README MD5 unchanged in main, index unchanged. |
+| C | (After agent return) called the orchestrator's `Edit` tool against the worktree's `README.md` via absolute path | Clean. Worktree's file modified; main's untouched. |
+
+Worktree git-dir topology was normal in all three: per-worktree `.git/worktrees/<name>/` with shared `.git/` common-dir. No `core.worktree` config quirks. This is the expected git worktree layout.
+
+### Hypotheses (not tested)
+
+The original observation may require conditions the spike didn't replicate:
+- Multiple concurrent worktree agents (FORGE-5.1 and FORGE-5.2 ran in parallel; the spike used one at a time).
+- A non-isolated agent (review) spawned after a worktree agent.
+- A specific tool sequence: agent return → orchestrator's `Edit` against worktree-absolute paths → `pnpm test` in worktree cwd → return to main repo.
+- An accidental orchestrator-side bash command staging files (no audit trail to confirm or rule out).
+
+### Proposed change
+
+**Defensive `git status` check at the top of every post-agent block** in the orchestrator skill. No cost, catches anything weird regardless of root cause:
+
+```bash
+# After every Agent worktree return, before cherry-pick / review / merge:
+if [ -n "$(git status --porcelain)" ]; then
+  # Inspect. If main repo has staged or modified files that match the
+  # agent's commit (and the orchestrator did not author them), reset:
+  #   git reset HEAD <files>
+  #   git checkout HEAD -- <files>
+  #   rm <any new files staged but not authored by the orchestrator>
+  # Then proceed with cherry-pick / merge as normal.
+fi
+```
+
+Document this as standard hygiene. Don't try to fix the underlying mechanism until the spike conditions are reproduced — fixing a phantom is worse than catching it.
+
+### Status
+
+One observation; three controlled non-reproductions. Severity **P2**: real enough that the defensive check is worth adding, not severe enough to block adoption of worktree-mode agents. If a second observation lands, escalate to **P0b** and rerun the spike with the higher-order combinations.
+
+---
+
 ## P3 — Worktree branches accumulate without cleanup
 
 ### Observed
@@ -188,6 +251,7 @@ The agent reads the brief itself. Removes 500+ words of redundant orchestrator-s
 | P2 | Branch agent prompt template by `task_kind` | Fewer mismatches between protocol and reality |
 | P2 | Structured 1-line agent reports by default | Saves 1500+ words of orchestrator context |
 | P2 | Tier review-loop by complexity | Saves spend on trivial tasks |
+| P2 | Defensive `git status` check after every worktree-agent return | Catches the unreproduced cross-tree state bleed |
 | P3 | Worktree cleanup at phase end | Hygiene |
 | P3 | Defined pause-and-check-in triggers | Avoids autopilot-overshoot |
 | P3 | Lean agent prompt template | Less redundant token spend |
