@@ -625,7 +625,7 @@
     {
       "id": "FORGE-7.1",
       "title": "ReadyTask gated flag — types + getReadyTasks compute",
-      "status": "open",
+      "status": "closed",
       "priority": 1,
       "labels": [
         "complexity:3",
@@ -644,12 +644,12 @@
       "notes": "Files: src/lib/tasks/types.ts (extend ReadyTask), src/lib/tasks/queries.ts (set gated at push site), src/lib/__tests__/tasks.test.ts (extend tests + sweep both literals). Foundation task — FORGE-7.4 reads the gated field from the JSON output. | The GATE_LABEL_HUMAN constant already exists at types.ts:11 from Phase 1; no constant work needed.",
       "dependencies": [],
       "comments": [],
-      "closeReason": null
+      "closeReason": "Implemented; 5 lib gated-flag tests + 1 CLI JSON-shape test; review PASS."
     },
     {
       "id": "FORGE-7.2",
       "title": "clearGate mutation — atomic, idempotent, no-write when label absent",
-      "status": "open",
+      "status": "closed",
       "priority": 1,
       "labels": [
         "complexity:3",
@@ -670,7 +670,7 @@
       "notes": "Files: src/lib/tasks/mutations.ts (add clearGate), src/lib/__tests__/tasks.test.ts (extend with idempotence/no-write/dup-removal/closed-task/cwd-threading tests). Independent of FORGE-7.1 — operates only on the persisted labels[] array. | clearGate mirrors addLabel's signature and locking pattern; the only difference is the filter direction. | The Bun+APFS mtime characteristic is what makes the no-write AC observable; if Bun ever batches writes differently, the hash assertion is the fallback contract.",
       "dependencies": [],
       "comments": [],
-      "closeReason": null
+      "closeReason": "Implemented; 7 ACs covered including mtime+content no-write check; review PASS."
     },
     {
       "id": "FORGE-7.3",
