@@ -32,7 +32,7 @@ For each acceptance criterion or logical unit of work, create a child task.
 forge tasks create "Task title" \
   -p <0-4> \
   --parent <epic-id> \
-  -l "complexity:<1-10>,phase:N" \
+  -l "complexity:<1-10>" -l "phase:N" \
   -d "WHAT: 2-4 sentence problem statement" \
   --design "HOW: types, interfaces, file paths, pseudo-code" \
   --acceptance "- [ ] First criterion
