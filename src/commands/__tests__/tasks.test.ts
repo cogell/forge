@@ -455,7 +455,7 @@ describe("forge tasks CLI", () => {
     expect(parsed.errors.length).toBeGreaterThan(0);
   });
 
-  // ── handleValidate FORGE-6.5: summary + severity-to-stream + exit ──
+  // ── handleValidate: summary + severity-to-stream + exit ──
 
   function joinLog(spy: ReturnType<typeof spyOn>): string {
     return spy.mock.calls.map((c: any[]) => String(c[0])).join("\n");
@@ -516,22 +516,7 @@ describe("forge tasks CLI", () => {
   });
 
   it("validate: combined 1 error + 2 warnings + 3 info → summary 'validate: 1 errors, 2 warnings', exit 1, all entries on stderr", async () => {
-    setupFeature(tmp, "auth", {
-      version: 1,
-      epics: [{ id: "TEST-1", title: "P1", created: "2026-03-30" }],
-      tasks: [
-        // Two open-empty tasks → 2 warnings
-        // Cycle FORGE-1.1 ↔ FORGE-1.2 → 1 error (also 2 warnings since both are open-empty)
-        { id: "TEST-1.1", title: "A", status: "open", priority: 2, labels: ["frontend"], description: "", design: "", acceptance: [], notes: "", dependencies: ["TEST-1.2"], comments: [], closeReason: null },
-        { id: "TEST-1.2", title: "B", status: "open", priority: 2, labels: ["backend"], description: "", design: "", acceptance: [], notes: "", dependencies: ["TEST-1.1"], comments: [], closeReason: null },
-        // Add 3 sibling tasks each carrying a distinct bare label → 3 info entries (each label appears on only one task)
-        { id: "TEST-2.1", title: "X", status: "open", priority: 2, labels: ["alpha"], description: "", design: "", acceptance: ["x"], notes: "", dependencies: [], comments: [], closeReason: null },
-        { id: "TEST-2.2", title: "Y", status: "open", priority: 2, labels: ["beta"], description: "", design: "", acceptance: ["y"], notes: "", dependencies: [], comments: [], closeReason: null },
-        { id: "TEST-2.3", title: "Z", status: "open", priority: 2, labels: ["gamma"], description: "", design: "", acceptance: ["z"], notes: "", dependencies: [], comments: [], closeReason: null },
-      ],
-      // Two epics so TEST-2.* doesn't orphan
-    } as TasksFile);
-    // Add the second epic by writing fresh
+    setupFeature(tmp, "auth");
     const data: TasksFile = {
       version: 1,
       epics: [
@@ -584,7 +569,7 @@ describe("forge tasks CLI", () => {
     expect(last).toMatch(/^validate: \d+ errors, \d+ warnings$/);
   });
 
-  it("validate --json: result object includes errors, warnings, info as separate arrays (FORGE-6.5)", async () => {
+  it("validate --json: result object includes errors, warnings, info as separate arrays", async () => {
     setupFeature(tmp, "auth", {
       version: 1,
       epics: [{ id: "TEST-1", title: "P1", created: "2026-03-30" }],

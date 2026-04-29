@@ -168,7 +168,6 @@ export function readTasksFile(filePath: string): TasksFile | null {
       );
     }
 
-    // FORGE-6.1: per-field shape validation. tr.id is now guaranteed string.
     const taskId = tr.id;
     const fieldError = (name: string, expected: string): string =>
       `Invalid task "${taskId}" in ${filePath}: field ${name} must be ${expected}. ${RECOVERY_HINT}`;
@@ -238,6 +237,13 @@ export function idDepth(id: string): number {
   const dashIdx = id.indexOf("-");
   if (dashIdx === -1) return 0;
   return id.substring(dashIdx + 1).split(".").length;
+}
+
+export function idParent(id: string): string | null {
+  if (idDepth(id) <= 1) return null;
+  const lastDot = id.lastIndexOf(".");
+  if (lastDot === -1) return null;
+  return id.substring(0, lastDot);
 }
 
 // ─── Task Lookup ────────────────────────────────────────────────────

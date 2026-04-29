@@ -1847,9 +1847,9 @@ describe("validateDag", () => {
   });
 });
 
-// ─── validateDag — FORGE-6.2: severity + warnings/info + type-conformance ──
+// ─── validateDag — structured result (warnings/info + type-conformance) ──
 
-describe("validateDag — structured result (FORGE-6.2)", () => {
+describe("validateDag — structured result", () => {
   let tmpDir: string;
   beforeEach(() => { tmpDir = makeTmpDir(); setupProject(tmpDir, "FORGE"); });
   afterEach(() => { rmSync(tmpDir, { recursive: true, force: true }); });
@@ -1861,21 +1861,10 @@ describe("validateDag — structured result (FORGE-6.2)", () => {
     expect(result.info).toEqual([]);
   });
 
-  it("existing four rules push entries with severity: 'error'", () => {
-    // Cycle rule (covers severity assertion for the cycle path)
-    setupFeature(tmpDir, "auth", { version: 1, epics: [{ id: "FORGE-1", title: "Auth", created: "2026-03-30" }], tasks: [
-      { id: "FORGE-1.1", title: "A", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: ["FORGE-1.2"], comments: [], closeReason: null },
-      { id: "FORGE-1.2", title: "B", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: ["FORGE-1.1"], comments: [], closeReason: null },
-    ] });
-    const result = validateDag({ kind: "feature", name: "auth" }, tmpDir);
-    expect(result.errors.length).toBeGreaterThan(0);
-    expect(result.errors.every((e) => e.severity === "error")).toBe(true);
-  });
-
-  it("early-exit (target file missing) carries severity: 'error' and full result shape", () => {
+  it("early-exit (target file missing) returns full result shape", () => {
     const result = validateDag({ kind: "feature", name: "nonexistent" }, tmpDir);
     expect(result.valid).toBe(false);
-    expect(result.errors[0].severity).toBe("error");
+    expect(result.errors).toHaveLength(1);
     expect(result.warnings).toEqual([]);
     expect(result.info).toEqual([]);
   });
@@ -1897,7 +1886,6 @@ describe("validateDag — structured result (FORGE-6.2)", () => {
     expect(result.valid).toBe(false);
     expect(result.errors).toHaveLength(1); // early-return — no other rules ran
     expect(result.errors[0].type).toBe("type-conformance");
-    expect(result.errors[0].severity).toBe("error");
     expect(result.errors[0].message).toContain("acceptance");
     expect(result.errors[0].message).toContain("forge tasks update");
     expect(result.warnings).toEqual([]);
@@ -1938,21 +1926,20 @@ describe("validateDag — structured result (FORGE-6.2)", () => {
   });
 });
 
-// ─── validateDag — empty-acceptance warning (FORGE-6.3) ─────────────
+// ─── validateDag — empty-acceptance warning ─────────────────────────
 
-describe("validateDag — empty-acceptance warning (FORGE-6.3)", () => {
+describe("validateDag — empty-acceptance warning", () => {
   let tmpDir: string;
   beforeEach(() => { tmpDir = makeTmpDir(); setupProject(tmpDir, "FORGE"); });
   afterEach(() => { rmSync(tmpDir, { recursive: true, force: true }); });
 
-  it("open task with empty acceptance[] produces a warning entry (severity 'warning', type 'empty-acceptance', message contains task ID)", () => {
+  it("open task with empty acceptance[] produces a warning entry (type 'empty-acceptance', message contains task ID)", () => {
     setupFeature(tmpDir, "auth", { version: 1, epics: [{ id: "FORGE-1", title: "Auth", created: "2026-03-30" }], tasks: [
       { id: "FORGE-1.1", title: "Open empty", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: null },
     ] });
     const result = validateDag({ kind: "feature", name: "auth" }, tmpDir);
     const warning = result.warnings.find((w) => w.type === "empty-acceptance");
     expect(warning).toBeDefined();
-    expect(warning!.severity).toBe("warning");
     expect(warning!.type).toBe("empty-acceptance");
     expect(warning!.message).toContain("FORGE-1.1");
     expect(warning!.ids).toEqual(["FORGE-1.1"]);
@@ -2007,9 +1994,9 @@ describe("validateDag — empty-acceptance warning (FORGE-6.3)", () => {
   });
 });
 
-// ─── validateDag — orphan-label info (FORGE-6.4) ─────────────────────
+// ─── validateDag — orphan-label info ────────────────────────────────
 
-describe("validateDag — orphan-label info (FORGE-6.4)", () => {
+describe("validateDag — orphan-label info", () => {
   let tmpDir: string;
   beforeEach(() => { tmpDir = makeTmpDir(); setupProject(tmpDir, "FORGE"); });
   afterEach(() => { rmSync(tmpDir, { recursive: true, force: true }); });
@@ -2041,10 +2028,9 @@ describe("validateDag — orphan-label info (FORGE-6.4)", () => {
     const result = validateDag({ kind: "feature", name: "auth" }, tmpDir);
     const orphans = result.info.filter((e) => e.type === "orphan-label");
     expect(orphans).toHaveLength(1);
-    expect(orphans[0].severity).toBe("info");
     expect(orphans[0].ids).toEqual(["FORGE-1.1"]);
     expect(orphans[0].message).toBe("Label 'frontend' on task FORGE-1.1 appears on only one task in the FORGE-1 sibling group");
-    // matches FORGE-6.5's locked regex
+    // Matches the regex anchored by handleValidate's locked output format.
     expect(orphans[0].message).toMatch(/^Label '.+' on task FORGE-\S+ appears on only one task in the FORGE-\S+ sibling group$/);
   });
 
@@ -2473,7 +2459,7 @@ describe("readTasksFile schema validation", () => {
   });
 });
 
-// ─── readTasksFile field-shape validation (FORGE-6.1) ─────────────────
+// ─── readTasksFile field-shape validation ────────────────────────────
 
 describe("readTasksFile field-shape validation", () => {
   let tmpDir: string;

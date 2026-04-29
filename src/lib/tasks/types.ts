@@ -83,7 +83,6 @@ export interface ValidationError {
     | "type-conformance"
     | "empty-acceptance"
     | "orphan-label";
-  severity: "error" | "warning" | "info";
   message: string;
   ids: string[];
 }

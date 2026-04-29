@@ -6,7 +6,9 @@ import { join } from "path";
 import { resolveRepoRoot } from "../worktree";
 import type { Epic, Task, ValidationError, ValidationResult, ValidateScope } from "./types";
 import { TASKS_FILENAME } from "./types";
-import { discoverTaskFilesFromRoot, idDepth, readTasksFile } from "./io";
+import { discoverTaskFilesFromRoot, idParent, readTasksFile } from "./io";
+
+const isNamespacedLabel = (label: string): boolean => label.includes(":");
 
 /**
  * Validate the task DAG for a feature, project-level tasks, or everything.
@@ -28,7 +30,7 @@ export function validateDag(scope: ValidateScope, cwd?: string): ValidationResul
       const projectPath = join(root, "plans", TASKS_FILENAME);
       targetFiles = allFiles.filter((f) => f === projectPath);
       if (targetFiles.length === 0) {
-        errors.push({ type: "orphan-dep", severity: "error", message: "No project-level tasks.json found at plans/tasks.json", ids: [] });
+        errors.push({ type: "orphan-dep", message: "No project-level tasks.json found at plans/tasks.json", ids: [] });
         return { valid: false, errors, warnings, info };
       }
       break;
@@ -37,7 +39,7 @@ export function validateDag(scope: ValidateScope, cwd?: string): ValidationResul
       const featurePath = join(root, "plans", scope.name, TASKS_FILENAME);
       targetFiles = allFiles.filter((f) => f === featurePath);
       if (targetFiles.length === 0) {
-        errors.push({ type: "orphan-dep", severity: "error", message: `No tasks.json found for feature "${scope.name}"`, ids: [] });
+        errors.push({ type: "orphan-dep", message: `No tasks.json found for feature "${scope.name}"`, ids: [] });
         return { valid: false, errors, warnings, info };
       }
       break;
@@ -65,7 +67,6 @@ export function validateDag(scope: ValidateScope, cwd?: string): ValidationResul
     } catch (caught) {
       errors.push({
         type: "type-conformance",
-        severity: "error",
         message: caught instanceof Error ? caught.message : String(caught),
         ids: [],
       });
@@ -78,7 +79,9 @@ export function validateDag(scope: ValidateScope, cwd?: string): ValidationResul
     fileTasksMap.set(filePath, data.tasks);
   }
 
-  // Pass 2: non-target files (silent on error)
+  // Pass 2: non-target files (silent on error). Their tasks/epics flow into
+  // allTasks/allEpics for cross-file dep + duplicate-id resolution; the
+  // per-file maps are only consulted for target files (orphan-epic rule).
   for (const filePath of allFiles) {
     if (targetSet.has(filePath)) continue;
     let data;
@@ -90,8 +93,6 @@ export function validateDag(scope: ValidateScope, cwd?: string): ValidationResul
     if (!data) continue;
     allTasks.push(...data.tasks);
     allEpics.push(...data.epics);
-    fileEpicsMap.set(filePath, new Set(data.epics.map((e) => e.id)));
-    fileTasksMap.set(filePath, data.tasks);
   }
 
   const taskIdSet = new Set(allTasks.map((t) => t.id));
@@ -107,7 +108,7 @@ export function validateDag(scope: ValidateScope, cwd?: string): ValidationResul
   const allIds = [...allTasks.map((t) => t.id), ...allEpics.map((e) => e.id)];
   for (const id of allIds) {
     if (seenIds.has(id)) {
-      errors.push({ type: "duplicate-id", severity: "error", message: `Duplicate ID: ${id}`, ids: [id] });
+      errors.push({ type: "duplicate-id", message: `Duplicate ID: ${id}`, ids: [id] });
     }
     seenIds.add(id);
   }
@@ -116,7 +117,7 @@ export function validateDag(scope: ValidateScope, cwd?: string): ValidationResul
   for (const task of targetTasks) {
     for (const depId of task.dependencies) {
       if (!taskIdSet.has(depId)) {
-        errors.push({ type: "orphan-dep", severity: "error", message: `Task ${task.id} depends on non-existent ${depId}`, ids: [task.id, depId] });
+        errors.push({ type: "orphan-dep", message: `Task ${task.id} depends on non-existent ${depId}`, ids: [task.id, depId] });
       }
     }
   }
@@ -133,7 +134,7 @@ export function validateDag(scope: ValidateScope, cwd?: string): ValidationResul
       const prefix = task.id.substring(0, dashIdx);
       const epicId = `${prefix}-${epicNum}`;
       if (!fileEpicIds.has(epicId)) {
-        errors.push({ type: "orphan-epic", severity: "error", message: `Task ${task.id} references non-existent epic ${epicId}`, ids: [task.id, epicId] });
+        errors.push({ type: "orphan-epic", message: `Task ${task.id} references non-existent epic ${epicId}`, ids: [task.id, epicId] });
       }
     }
   }
@@ -169,7 +170,7 @@ export function validateDag(scope: ValidateScope, cwd?: string): ValidationResul
         const key = normalizeCycle(cycle);
         if (!reportedCycles.has(key)) {
           reportedCycles.add(key);
-          errors.push({ type: "cycle", severity: "error", message: `Cycle detected: ${cycle.join(" → ")} → ${depId}`, ids: cycle });
+          errors.push({ type: "cycle", message: `Cycle detected: ${cycle.join(" → ")} → ${depId}`, ids: cycle });
         }
       } else if (color.get(depId) === WHITE) {
         dfs(depId, path);
@@ -186,31 +187,25 @@ export function validateDag(scope: ValidateScope, cwd?: string): ValidationResul
     }
   }
 
-  // 5. Empty acceptance warning (FORGE-6.3): open tasks with no acceptance
-  // criteria. Closed and in_progress tasks are exempt.
+  // 5. Empty acceptance: open tasks only — closed has shipped, in_progress
+  // may be mid-edit.
   for (const task of targetTasks) {
     if (task.status === "open" && task.acceptance.length === 0) {
       warnings.push({
         type: "empty-acceptance",
-        severity: "warning",
         message: `Task ${task.id} has no acceptance criteria`,
         ids: [task.id],
       });
     }
   }
 
-  // 6. Orphan-label info (FORGE-6.4): bare labels appearing on exactly one
-  // task within a sibling group. Sibling = same immediate parent, derived by
-  // dropping the last '.N' segment of the ID. Labels containing ':' are
-  // prefix-namespaced metadata (phase:N, gate:human, complexity:N) and are
-  // exempt. Tasks at depth ≤ 1 (epic-shaped IDs) have no sibling group and
-  // are skipped entirely.
+  // 6. Orphan-label: bare labels appearing on exactly one task in a sibling
+  // group. Namespaced labels (phase:N, gate:human, complexity:N, future
+  // <ns>:value) are exempt — those are metadata, not topical tags.
   const groupMap = new Map<string, Task[]>();
   for (const task of targetTasks) {
-    if (idDepth(task.id) <= 1) continue;
-    const lastDot = task.id.lastIndexOf(".");
-    if (lastDot === -1) continue;
-    const parentId = task.id.substring(0, lastDot);
+    const parentId = idParent(task.id);
+    if (parentId === null) continue;
     const group = groupMap.get(parentId);
     if (group) {
       group.push(task);
@@ -219,22 +214,19 @@ export function validateDag(scope: ValidateScope, cwd?: string): ValidationResul
     }
   }
   for (const [parentId, groupTasks] of groupMap) {
-    // Count bare labels across the group.
     const labelCounts = new Map<string, number>();
     for (const task of groupTasks) {
       for (const label of task.labels) {
-        if (label.includes(":")) continue;
+        if (isNamespacedLabel(label)) continue;
         labelCounts.set(label, (labelCounts.get(label) ?? 0) + 1);
       }
     }
-    // Emit info for tasks carrying a label with count === 1.
     for (const task of groupTasks) {
       for (const label of task.labels) {
-        if (label.includes(":")) continue;
+        if (isNamespacedLabel(label)) continue;
         if (labelCounts.get(label) === 1) {
           info.push({
             type: "orphan-label",
-            severity: "info",
             message: `Label '${label}' on task ${task.id} appears on only one task in the ${parentId} sibling group`,
             ids: [task.id],
           });
