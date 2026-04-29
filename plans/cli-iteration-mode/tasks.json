@@ -675,7 +675,7 @@
     {
       "id": "FORGE-7.3",
       "title": "Dispatcher: forge tasks gate clear <id>",
-      "status": "open",
+      "status": "closed",
       "priority": 2,
       "labels": [
         "complexity:3",
@@ -698,7 +698,7 @@
         "FORGE-7.2"
       ],
       "comments": [],
-      "closeReason": null
+      "closeReason": "Implemented; 7 CLI tests covering all 8 ACs; review PASS."
     },
     {
       "id": "FORGE-7.4",
