@@ -66,21 +66,54 @@ git commit -m "chore(<feature>): add Phase <N> plan + tasks"
 
 ### Phase 1-N: Execute Each Plan Phase
 
+#### Human-gated task gate (run BEFORE dispatching each ready task)
+
+`forge tasks ready --json` returns each `ReadyTask` with a `gated: boolean` field
+(see FORGE-7.1). When `gated` is `true`, the task is human-gated: the agent MUST
+NOT spawn a task agent for it until the user confirms the prerequisite is done.
+
+For every ready task whose `gated === true`, prompt the user with this exact
+template (literal `\n` represents a real newline in the rendered prompt):
+
+```
+<id> is human-gated.
+  Title: <title>
+  Have you completed the prerequisite? (y/N)
+```
+
+Substitute `<id>` and `<title>` with the task's `id` and `title` fields from the
+`ReadyTask` JSON.
+
+Decision logic:
+
+- **`y` or `Y`** — the prerequisite is done. Run `forge tasks gate clear <id>`
+  to remove the `human-gate` label, then proceed with normal dispatch on that
+  task (spawn the task agent, run TDD, etc.).
+- **`N` (default — Enter without input) or any other input** — the prerequisite
+  is NOT done. Skip this task without modifying it (do not call
+  `forge tasks gate clear`); move on to the next ready task. The gate stays in
+  place so the task will be re-prompted on the next loop iteration.
+
+Anything other than `y/Y` is treated as `N`. Only `y/Y` clears the gate.
+
 #### Task loop
 
 ```
 while forge tasks ready returns tasks for this phase's epic:
     1. Pick highest-priority ready task
-    2. Spawn a task agent (worktree isolation, TDD workflow)
-    3. On task failure → spawn salvage agent (uses debugging.md protocol)
-    4. On task success → run review loop:
+    2. If task.gated === true: run the human-gate prompt above.
+       - Confirmed (y/Y) → call `forge tasks gate clear <id>`, then continue.
+       - Not confirmed (N or default) → skip to the next ready task.
+    3. Spawn a task agent (worktree isolation, TDD workflow)
+    4. On task failure → spawn salvage agent (uses debugging.md protocol)
+    5. On task success → run review loop:
        a. Spawn review agent with task content + git diff
        b. PASS → merge worktree branch, close task
        c. FAIL → spawn fix agent with review feedback
        d. Spawn review agent again
        e. PASS → merge worktree branch, close task
        f. FAIL (2nd) → label needs-human, skip task
-    5. Repeat
+    6. Repeat
 ```
 
 #### Docs graduation (mandatory after each phase)
