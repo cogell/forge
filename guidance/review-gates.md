@@ -11,6 +11,7 @@ The authoring agent runs this checklist itself — not a subagent dispatch:
 1. **Source coverage** — skim each requirement in the source material. Can you point to a section/task that addresses it? List any gaps.
 2. **Placeholder scan** — search the artifact for red flags from the placeholder list below. Fix them inline.
 3. **Name consistency** — do types, method signatures, field names, and file paths used in later sections match what was defined in earlier sections? A function called `clearLayers()` in Phase 1 but `clearFullLayers()` in Phase 3 is a bug.
+4. **Cited-fact verification** — for every spec claim that names a specific function body, line number, exit code, or error-string literal (e.g., "`fail()` exits 2", "mutations.ts:564 throws X", "`addLabel` has no status guard"), grep or read the actual source and confirm. Specs can confidently state wrong facts; reviewers extend trust globally and won't catch isolated factual drift unless every cited claim is re-verified at the source.
 
 Fix issues inline. If you find a requirement with no coverage, add it. Then proceed to external review.
 
@@ -181,6 +182,7 @@ You have full codebase access. Do not rewrite — only identify issues.
 - No TBD, TODO, vague directives, or "similar to Task N"
 - Design fields show actual types/interfaces/code, not descriptions of what to write
 - No references to types or functions not defined in any task or existing code
+- Cited line numbers, function names, exit codes, and error-string literals are verified by grep/read against the actual source — not taken on faith from the spec
 
 ### Coverage
 - Every acceptance criterion from the plan phase maps to at least one task
