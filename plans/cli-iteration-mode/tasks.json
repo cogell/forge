@@ -471,7 +471,7 @@
     {
       "id": "FORGE-6.1",
       "title": "io.ts: extend readTasksFile structural check + RECOVERY_HINT constant",
-      "status": "open",
+      "status": "in_progress",
       "priority": 1,
       "labels": [
         "complexity:5",

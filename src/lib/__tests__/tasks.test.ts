@@ -10,6 +10,7 @@ import {
   SCHEMA_VERSION,
   TASKS_FILENAME,
   MAX_NESTING_DEPTH,
+  RECOVERY_HINT,
   discoverTaskFiles,
   readTasksFile,
   readProjectPrefix,
@@ -69,6 +70,14 @@ describe("constants", () => {
 
   it("MAX_NESTING_DEPTH is 3", () => {
     expect(MAX_NESTING_DEPTH).toBe(3);
+  });
+
+  it("RECOVERY_HINT contains literal substring 'forge tasks update'", () => {
+    expect(RECOVERY_HINT).toContain("forge tasks update");
+  });
+
+  it("RECOVERY_HINT contains literal substring 'forge tasks edit'", () => {
+    expect(RECOVERY_HINT).toContain("forge tasks edit");
   });
 });
 
@@ -2129,6 +2138,229 @@ describe("readTasksFile schema validation", () => {
     const filePath = join(tmpDir, "tasks.json");
     writeFileSync(filePath, JSON.stringify({ version: 1, epics: [], tasks: [] }));
     const result = readTasksFile(filePath);
+    expect(result).not.toBeNull();
+    expect(result!.epics).toEqual([]);
+    expect(result!.tasks).toEqual([]);
+  });
+});
+
+// ─── readTasksFile field-shape validation (FORGE-6.1) ─────────────────
+
+describe("readTasksFile field-shape validation", () => {
+  let tmpDir: string;
+  beforeEach(() => { tmpDir = makeTmpDir(); });
+  afterEach(() => { rmSync(tmpDir, { recursive: true, force: true }); });
+
+  function writeTaskWithOverride(overrides: Record<string, unknown>): string {
+    const baseTask = {
+      id: "T-001",
+      title: "Test",
+      status: "open",
+      priority: 2,
+      labels: [],
+      description: "",
+      design: "",
+      acceptance: [],
+      notes: "",
+      dependencies: [],
+      comments: [],
+      closeReason: null,
+    };
+    const fp = join(tmpDir, "tasks.json");
+    writeFileSync(fp, JSON.stringify({
+      version: 1,
+      epics: [],
+      tasks: [{ ...baseTask, ...overrides }],
+    }));
+    return fp;
+  }
+
+  // ─── Per-field negative cases ───────────────────────────────────────
+
+  it("rejects non-string title", () => {
+    const fp = writeTaskWithOverride({ title: 123 });
+    expect(() => readTasksFile(fp)).toThrow(/field title must be string/);
+    try { readTasksFile(fp); } catch (e: any) { expect(e.message).toContain("forge tasks update"); }
+  });
+
+  it("rejects non-number priority", () => {
+    const fp = writeTaskWithOverride({ priority: "high" });
+    expect(() => readTasksFile(fp)).toThrow(/field priority must be number/);
+    try { readTasksFile(fp); } catch (e: any) { expect(e.message).toContain("forge tasks update"); }
+  });
+
+  it("rejects non-array labels", () => {
+    const fp = writeTaskWithOverride({ labels: "auth" });
+    expect(() => readTasksFile(fp)).toThrow(/field labels must be string\[\]/);
+    try { readTasksFile(fp); } catch (e: any) { expect(e.message).toContain("forge tasks update"); }
+  });
+
+  it("rejects labels with non-string entry", () => {
+    const fp = writeTaskWithOverride({ labels: ["ok", 42] });
+    expect(() => readTasksFile(fp)).toThrow(/field labels must be string\[\]/);
+  });
+
+  it("rejects non-string description", () => {
+    const fp = writeTaskWithOverride({ description: null });
+    expect(() => readTasksFile(fp)).toThrow(/field description must be string/);
+    try { readTasksFile(fp); } catch (e: any) { expect(e.message).toContain("forge tasks update"); }
+  });
+
+  it("rejects non-string design", () => {
+    const fp = writeTaskWithOverride({ design: 0 });
+    expect(() => readTasksFile(fp)).toThrow(/field design must be string/);
+  });
+
+  it("rejects acceptance: 'a string' (reviewer-reported blind spot)", () => {
+    const fp = writeTaskWithOverride({ acceptance: "a string" });
+    expect(() => readTasksFile(fp)).toThrow(/field acceptance must be string\[\]/);
+    try { readTasksFile(fp); } catch (e: any) {
+      expect(e.message).toContain("acceptance");
+      expect(e.message).toContain("string[]");
+      expect(e.message).toContain("forge tasks update");
+    }
+  });
+
+  it("rejects acceptance with non-string entry", () => {
+    const fp = writeTaskWithOverride({ acceptance: ["ok", 99] });
+    expect(() => readTasksFile(fp)).toThrow(/field acceptance must be string\[\]/);
+  });
+
+  it("rejects non-string notes", () => {
+    const fp = writeTaskWithOverride({ notes: 42 });
+    expect(() => readTasksFile(fp)).toThrow(/field notes must be string/);
+  });
+
+  it("rejects non-array dependencies", () => {
+    const fp = writeTaskWithOverride({ dependencies: "T-002" });
+    expect(() => readTasksFile(fp)).toThrow(/field dependencies must be string\[\]/);
+  });
+
+  it("rejects dependencies with non-string entry", () => {
+    const fp = writeTaskWithOverride({ dependencies: ["T-002", null] });
+    expect(() => readTasksFile(fp)).toThrow(/field dependencies must be string\[\]/);
+  });
+
+  // ─── comments[] sub-cases ───────────────────────────────────────────
+
+  it("rejects comments not an array", () => {
+    const fp = writeTaskWithOverride({ comments: "a comment" });
+    expect(() => readTasksFile(fp)).toThrow(/field comments must be Comment\[\]/);
+  });
+
+  it("rejects comments entry missing message", () => {
+    const fp = writeTaskWithOverride({ comments: [{ timestamp: "2026-04-29T00:00:00Z" }] });
+    expect(() => readTasksFile(fp)).toThrow(/field comments must be Comment\[\]/);
+  });
+
+  it("rejects comments entry missing timestamp", () => {
+    const fp = writeTaskWithOverride({ comments: [{ message: "hi" }] });
+    expect(() => readTasksFile(fp)).toThrow(/field comments must be Comment\[\]/);
+  });
+
+  it("rejects comments entry with non-string message", () => {
+    const fp = writeTaskWithOverride({ comments: [{ message: 1, timestamp: "ts" }] });
+    expect(() => readTasksFile(fp)).toThrow(/field comments must be Comment\[\]/);
+  });
+
+  it("rejects comments entry with non-string timestamp", () => {
+    const fp = writeTaskWithOverride({ comments: [{ message: "hi", timestamp: 0 }] });
+    expect(() => readTasksFile(fp)).toThrow(/field comments must be Comment\[\]/);
+  });
+
+  // ─── closeReason: null | string ─────────────────────────────────────
+
+  it("accepts closeReason: null", () => {
+    const fp = writeTaskWithOverride({ closeReason: null });
+    expect(() => readTasksFile(fp)).not.toThrow();
+  });
+
+  it("accepts closeReason: string", () => {
+    const fp = writeTaskWithOverride({ closeReason: "completed" });
+    expect(() => readTasksFile(fp)).not.toThrow();
+  });
+
+  it("rejects closeReason: number", () => {
+    const fp = writeTaskWithOverride({ closeReason: 0 });
+    expect(() => readTasksFile(fp)).toThrow(/field closeReason must be string \| null/);
+  });
+
+  it("rejects closeReason: bool", () => {
+    const fp = writeTaskWithOverride({ closeReason: false });
+    expect(() => readTasksFile(fp)).toThrow(/field closeReason must be string \| null/);
+  });
+
+  // ─── Existing 7 throw sites: each contains 'forge tasks update' ─────
+
+  it("JSON-parse throw includes 'forge tasks update'", () => {
+    const fp = join(tmpDir, "bad.json");
+    writeFileSync(fp, "{ not json");
+    try { readTasksFile(fp); throw new Error("should have thrown"); }
+    catch (e: any) { expect(e.message).toContain("forge tasks update"); }
+  });
+
+  it("top-level shape throw includes 'forge tasks update'", () => {
+    const fp = join(tmpDir, "tasks.json");
+    writeFileSync(fp, JSON.stringify({ foo: "bar" }));
+    try { readTasksFile(fp); throw new Error("should have thrown"); }
+    catch (e: any) { expect(e.message).toContain("forge tasks update"); }
+  });
+
+  it("version-too-new throw includes 'forge tasks update'", () => {
+    const fp = join(tmpDir, "tasks.json");
+    writeFileSync(fp, JSON.stringify({ version: 999, epics: [], tasks: [] }));
+    try { readTasksFile(fp); throw new Error("should have thrown"); }
+    catch (e: any) { expect(e.message).toContain("forge tasks update"); }
+  });
+
+  it("epic-id throw includes 'forge tasks update'", () => {
+    const fp = join(tmpDir, "tasks.json");
+    writeFileSync(fp, JSON.stringify({ version: 1, epics: [{ title: "no id" }], tasks: [] }));
+    try { readTasksFile(fp); throw new Error("should have thrown"); }
+    catch (e: any) { expect(e.message).toContain("forge tasks update"); }
+  });
+
+  it("task-not-object throw includes 'forge tasks update'", () => {
+    const fp = join(tmpDir, "tasks.json");
+    writeFileSync(fp, JSON.stringify({ version: 1, epics: [], tasks: ["not-object"] }));
+    try { readTasksFile(fp); throw new Error("should have thrown"); }
+    catch (e: any) { expect(e.message).toContain("forge tasks update"); }
+  });
+
+  it("task-id throw includes 'forge tasks update'", () => {
+    const fp = join(tmpDir, "tasks.json");
+    writeFileSync(fp, JSON.stringify({ version: 1, epics: [], tasks: [{ status: "open" }] }));
+    try { readTasksFile(fp); throw new Error("should have thrown"); }
+    catch (e: any) { expect(e.message).toContain("forge tasks update"); }
+  });
+
+  it("task-status throw includes 'forge tasks update'", () => {
+    const fp = join(tmpDir, "tasks.json");
+    writeFileSync(fp, JSON.stringify({ version: 1, epics: [], tasks: [{ id: "T-1", status: "weird" }] }));
+    try { readTasksFile(fp); throw new Error("should have thrown"); }
+    catch (e: any) { expect(e.message).toContain("forge tasks update"); }
+  });
+
+  // ─── Version handling: unchanged semantics ──────────────────────────
+
+  it("version > SCHEMA_VERSION still throws (unchanged behavior)", () => {
+    const fp = join(tmpDir, "tasks.json");
+    writeFileSync(fp, JSON.stringify({ version: SCHEMA_VERSION + 1, epics: [], tasks: [] }));
+    expect(() => readTasksFile(fp)).toThrow(/schema version/);
+  });
+
+  it("version <= SCHEMA_VERSION loads without version-check firing", () => {
+    const fp = join(tmpDir, "tasks.json");
+    writeFileSync(fp, JSON.stringify({ version: SCHEMA_VERSION, epics: [], tasks: [] }));
+    expect(() => readTasksFile(fp)).not.toThrow();
+  });
+
+  // ─── Zero-data state ────────────────────────────────────────────────
+
+  it("loads empty epics[] / empty tasks[] without error (zero-data)", () => {
+    const fp = join(tmpDir, "tasks.json");
+    writeFileSync(fp, JSON.stringify({ version: 1, epics: [], tasks: [] }));
+    const result = readTasksFile(fp);
     expect(result).not.toBeNull();
     expect(result!.epics).toEqual([]);
     expect(result!.tasks).toEqual([]);
