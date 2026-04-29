@@ -1938,6 +1938,73 @@ describe("validateDag — structured result (FORGE-6.2)", () => {
   });
 });
 
+describe("validateDag — empty-acceptance warning (FORGE-6.3)", () => {
+  let tmpDir: string;
+  beforeEach(() => { tmpDir = makeTmpDir(); setupProject(tmpDir, "FORGE"); });
+  afterEach(() => { rmSync(tmpDir, { recursive: true, force: true }); });
+
+  it("open task with empty acceptance[] produces a warning entry (severity 'warning', type 'empty-acceptance', message contains task ID)", () => {
+    setupFeature(tmpDir, "auth", { version: 1, epics: [{ id: "FORGE-1", title: "Auth", created: "2026-03-30" }], tasks: [
+      { id: "FORGE-1.1", title: "Open empty", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: null },
+    ] });
+    const result = validateDag({ kind: "feature", name: "auth" }, tmpDir);
+    const warning = result.warnings.find((w) => w.type === "empty-acceptance");
+    expect(warning).toBeDefined();
+    expect(warning!.severity).toBe("warning");
+    expect(warning!.type).toBe("empty-acceptance");
+    expect(warning!.message).toContain("FORGE-1.1");
+    expect(warning!.ids).toEqual(["FORGE-1.1"]);
+  });
+
+  it("closed task with empty acceptance[] does NOT produce a warning", () => {
+    setupFeature(tmpDir, "auth", { version: 1, epics: [{ id: "FORGE-1", title: "Auth", created: "2026-03-30" }], tasks: [
+      { id: "FORGE-1.1", title: "Closed empty", status: "closed", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: "done" },
+    ] });
+    const result = validateDag({ kind: "feature", name: "auth" }, tmpDir);
+    expect(result.warnings.some((w) => w.type === "empty-acceptance")).toBe(false);
+  });
+
+  it("in_progress task with empty acceptance[] does NOT produce a warning", () => {
+    setupFeature(tmpDir, "auth", { version: 1, epics: [{ id: "FORGE-1", title: "Auth", created: "2026-03-30" }], tasks: [
+      { id: "FORGE-1.1", title: "WIP empty", status: "in_progress", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: null },
+    ] });
+    const result = validateDag({ kind: "feature", name: "auth" }, tmpDir);
+    expect(result.warnings.some((w) => w.type === "empty-acceptance")).toBe(false);
+  });
+
+  it("open task with populated acceptance[] does NOT produce a warning", () => {
+    setupFeature(tmpDir, "auth", { version: 1, epics: [{ id: "FORGE-1", title: "Auth", created: "2026-03-30" }], tasks: [
+      { id: "FORGE-1.1", title: "Open populated", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: ["x"], notes: "", dependencies: [], comments: [], closeReason: null },
+    ] });
+    const result = validateDag({ kind: "feature", name: "auth" }, tmpDir);
+    expect(result.warnings.some((w) => w.type === "empty-acceptance")).toBe(false);
+  });
+
+  it("warning lands in result.warnings (not result.errors); result.valid stays true", () => {
+    setupFeature(tmpDir, "auth", { version: 1, epics: [{ id: "FORGE-1", title: "Auth", created: "2026-03-30" }], tasks: [
+      { id: "FORGE-1.1", title: "Open empty", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: null },
+    ] });
+    const result = validateDag({ kind: "feature", name: "auth" }, tmpDir);
+    expect(result.errors.some((e) => e.type === "empty-acceptance")).toBe(false);
+    expect(result.warnings.some((w) => w.type === "empty-acceptance")).toBe(true);
+    expect(result.valid).toBe(true);
+  });
+
+  it("covers all four state combinations in a single fixture", () => {
+    setupFeature(tmpDir, "auth", { version: 1, epics: [{ id: "FORGE-1", title: "Auth", created: "2026-03-30" }], tasks: [
+      { id: "FORGE-1.1", title: "Open empty", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: null },
+      { id: "FORGE-1.2", title: "Closed empty", status: "closed", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: "done" },
+      { id: "FORGE-1.3", title: "WIP empty", status: "in_progress", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: null },
+      { id: "FORGE-1.4", title: "Open populated", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: ["x"], notes: "", dependencies: [], comments: [], closeReason: null },
+    ] });
+    const result = validateDag({ kind: "feature", name: "auth" }, tmpDir);
+    const emptyAccept = result.warnings.filter((w) => w.type === "empty-acceptance");
+    expect(emptyAccept).toHaveLength(1);
+    expect(emptyAccept[0].ids).toEqual(["FORGE-1.1"]);
+    expect(result.valid).toBe(true);
+  });
+});
+
 // ─── Auto-close cascade (grandparent) ───────────────────────────────
 
 describe("auto-close cascade", () => {

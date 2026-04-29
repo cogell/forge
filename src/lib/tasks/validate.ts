@@ -186,5 +186,17 @@ export function validateDag(scope: ValidateScope, cwd?: string): ValidationResul
     }
   }
 
+  // 5. Empty acceptance warning (open tasks only, scoped to target tasks)
+  for (const task of targetTasks) {
+    if (task.status === "open" && task.acceptance.length === 0) {
+      warnings.push({
+        type: "empty-acceptance",
+        severity: "warning",
+        message: `Task ${task.id} has no acceptance criteria`,
+        ids: [task.id],
+      });
+    }
+  }
+
   return { valid: errors.length === 0, errors, warnings, info };
 }
