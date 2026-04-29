@@ -146,6 +146,52 @@ describe("forge run CLI", () => {
     expect(errMsgs).toMatch(/--phase/);
   });
 
+  it.each([
+    ["0", "zero"],
+    ["-1", "negative"],
+    ["1.5", "decimal"],
+    ["5e2", "scientific"],
+    ["0x10", "hex"],
+    [" 5 ", "padded"],
+    ["01", "leading-zero"],
+  ])("--phase rejects '%s' (%s) with positive-integer error", async (value) => {
+    setupFeature(tmp, "auth");
+    try {
+      await run(["auth", "--phase", value]);
+    } catch {}
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    const errMsgs = errorSpy.mock.calls.map((c: any[]) => String(c[0])).join("\n");
+    expect(errMsgs).toMatch(/--phase requires a positive integer/);
+  });
+
+  it("--epic rejects empty string with explicit error", async () => {
+    try {
+      await run(["--epic", "", "--json"]);
+    } catch {}
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    const errMsgs = errorSpy.mock.calls.map((c: any[]) => String(c[0])).join("\n");
+    expect(errMsgs).toMatch(/--epic requires a non-empty value/);
+  });
+
+  it("--phase rejects empty string with explicit error", async () => {
+    setupFeature(tmp, "auth");
+    try {
+      await run(["auth", "--phase", ""]);
+    } catch {}
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    const errMsgs = errorSpy.mock.calls.map((c: any[]) => String(c[0])).join("\n");
+    expect(errMsgs).toMatch(/--phase requires a non-empty value/);
+  });
+
+  it("rejects feature names with path-traversal sequences", async () => {
+    try {
+      await run(["../etc"]);
+    } catch {}
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    const errMsgs = errorSpy.mock.calls.map((c: any[]) => String(c[0])).join("\n");
+    expect(errMsgs).toMatch(/Invalid feature name/);
+  });
+
   it("value-flag-aware parsing: '--epic SK-5' does not set feature positional to 'SK-5'", async () => {
     // If the parser were broken, 'SK-5' would be picked up as a feature, leading to
     // a no-prd / no-forge.json / etc. failure. With proper parsing, --epic alone

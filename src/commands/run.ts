@@ -14,7 +14,12 @@
 
 import { existsSync } from "fs";
 import { join } from "path";
-import { queryFeatureTasks, readProjectPrefix, nextOpenPhase } from "../lib/tasks";
+import {
+  queryFeatureTasks,
+  readProjectPrefix,
+  nextOpenPhase,
+  validateFeatureName,
+} from "../lib/tasks";
 
 /**
  * Pluggable git runner — kept narrow on purpose so tests can inject a stub
@@ -101,8 +106,20 @@ function parseRunArgs(args: string[]): ParsedArgs {
 export async function run(args: string[]): Promise<void> {
   const { feature, epicFlag, phaseFlag, json } = parseRunArgs(args);
 
-  // Mutex check first.
-  if (epicFlag && phaseFlag) {
+  // Reject empty values explicitly — almost always a shell-scripting typo,
+  // and silent normalization to null would mask the bug.
+  if (epicFlag === "") {
+    console.error("--epic requires a non-empty value");
+    process.exit(1);
+  }
+  if (phaseFlag === "") {
+    console.error("--phase requires a non-empty value");
+    process.exit(1);
+  }
+
+  // Mutex check (after empty-value rejection so '--epic "" --phase 1'
+  // surfaces the more specific empty-value error).
+  if (epicFlag !== null && phaseFlag !== null) {
     console.error("--epic and --phase are mutually exclusive");
     process.exit(2);
   }
@@ -114,12 +131,13 @@ export async function run(args: string[]): Promise<void> {
   if (!feature) {
     if (epicFlag) {
       // --epic alone path (case a): skip feature-scoped precondition checks.
-      const phaseValue = phaseFlag !== null ? Number(phaseFlag) : null;
+      // phaseFlag is guaranteed null here (mutex eliminated the both-set case;
+      // empty-string was rejected above).
       const payload = {
         status: "ready",
         feature: null,
         epic: epicFlag,
-        phase: phaseValue,
+        phase: null,
         planningArtifactsDirty: false,
         suggestedPhase: null,
         suggestedPhaseDiagnostic: EPIC_SKIP_DIAGNOSTIC,
@@ -128,7 +146,6 @@ export async function run(args: string[]): Promise<void> {
         console.log(JSON.stringify(payload));
       } else {
         console.log(`Epic:     ${epicFlag}`);
-        if (phaseValue !== null) console.log(`--phase:  ${phaseValue}`);
         console.log(`Planning: ${payload.planningArtifactsDirty ? "dirty" : "clean"}`);
         console.log(`Phase:    none — ${payload.suggestedPhaseDiagnostic}`);
       }
@@ -142,11 +159,21 @@ export async function run(args: string[]): Promise<void> {
     process.exit(1);
   }
 
-  // Validate --phase numeric (after no-feature relaxation per design order).
+  // Defense-in-depth: reject path-traversal sequences in the feature
+  // positional before any path joins (existsSync, detectDirtyPlanningArtifacts).
+  try {
+    validateFeatureName(feature);
+  } catch (e) {
+    console.error((e as Error).message);
+    process.exit(1);
+  }
+
+  // Validate --phase as a positive integer in decimal notation.
+  // Number()-based validation accepted "", " 5 ", "5e2", "0x10", "-1"; the
+  // regex locks the contract to plain positive integers.
   if (phaseFlag !== null) {
-    const n = Number(phaseFlag);
-    if (!Number.isInteger(n)) {
-      console.error(`--phase requires an integer value (got '${phaseFlag}')`);
+    if (!/^[1-9]\d*$/.test(phaseFlag)) {
+      console.error(`--phase requires a positive integer (got '${phaseFlag}')`);
       process.exit(1);
     }
   }

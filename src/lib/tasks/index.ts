@@ -29,7 +29,7 @@ export {
 export { readProjectPrefix, isValidPrefix } from "./config";
 
 // File I/O
-export { resolveTasksPath, discoverTaskFiles, readTasksFile } from "./io";
+export { resolveTasksPath, discoverTaskFiles, readTasksFile, validateFeatureName } from "./io";
 
 // Queries
 export { queryFeatureTasks, getReadyTasks, getDescendants, nextOpenPhase } from "./queries";
