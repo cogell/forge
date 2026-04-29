@@ -20,6 +20,11 @@
       "id": "FORGE-6",
       "title": "Phase 4: Validation hardening — load-time + deeper validate",
       "created": "2026-04-29"
+    },
+    {
+      "id": "FORGE-7",
+      "title": "Phase 5: Human-gated tasks",
+      "created": "2026-04-29"
     }
   ],
   "tasks": [
@@ -616,6 +621,112 @@
       ],
       "comments": [],
       "closeReason": "Implemented; 8 new tests covering the 4 locked output contracts; review PASS."
+    },
+    {
+      "id": "FORGE-7.1",
+      "title": "ReadyTask gated flag — types + getReadyTasks compute",
+      "status": "open",
+      "priority": 1,
+      "labels": [
+        "complexity:3",
+        "phase:5"
+      ],
+      "description": "WHAT: Extend the ReadyTask interface (src/lib/tasks/types.ts:70-75) with required gated: boolean and have getReadyTasks set it from each task's labels. The gated flag is consumed by the skill-layer prompt (FORGE-7.4) before dispatching tasks. Closes plan AC1 (gated in JSON) and AC2 (filter composition with --label gate:human).",
+      "design": "HOW: In src/lib/tasks/types.ts, add gated: boolean to ReadyTask alongside id/title/priority/labels (line 70-75). In src/lib/tasks/queries.ts, at the existing ready.push site (queries.ts:182-187), set gated: task.labels.includes(GATE_LABEL_HUMAN). Import GATE_LABEL_HUMAN from ./types if not already imported. The label filter at lines 171-180 needs no change — gate:human tasks naturally appear in --label gate:human results because Phase 1's filter is AND on labels[].includes. Mechanically update BOTH ReadyTask object literals in src/lib/__tests__/tasks.test.ts as part of THIS task: line 285-290 (typed literal const task: ReadyTask = {...}) and line 683-688 (toEqual({...}) — would HARD-FAIL on a missing required field). No follow-up sweep task.",
+      "acceptance": [
+        "ReadyTask interface has required field gated: boolean.",
+        "getReadyTasks sets gated=true iff labels contains GATE_LABEL_HUMAN; verified across shapes (no labels, only gate:human, gate:human + others, only others).",
+        "forge tasks ready --json output includes gated: boolean on every element of the top-level array.",
+        "forge tasks ready --label gate:human returns only gated=true tasks (Phase 1 filter composes correctly).",
+        "Both ReadyTask object literals in src/lib/__tests__/tasks.test.ts are updated to include gated: false (lines 285-290 and 683-688). Grep ReadyTask|toEqual\\(\\{ across the file confirms zero ReadyTask-shaped literals lack the field after sweep (over-matches non-ReadyTask toEqual sites at ~10 lines; manually filter).",
+        "pnpm test passes; pnpm typecheck passes."
+      ],
+      "notes": "Files: src/lib/tasks/types.ts (extend ReadyTask), src/lib/tasks/queries.ts (set gated at push site), src/lib/__tests__/tasks.test.ts (extend tests + sweep both literals). Foundation task — FORGE-7.4 reads the gated field from the JSON output. | The GATE_LABEL_HUMAN constant already exists at types.ts:11 from Phase 1; no constant work needed.",
+      "dependencies": [],
+      "comments": [],
+      "closeReason": null
+    },
+    {
+      "id": "FORGE-7.2",
+      "title": "clearGate mutation — atomic, idempotent, no-write when label absent",
+      "status": "open",
+      "priority": 1,
+      "labels": [
+        "complexity:3",
+        "phase:5"
+      ],
+      "description": "WHAT: Add an async clearGate(id, cwd?) mutation in src/lib/tasks/mutations.ts that removes GATE_LABEL_HUMAN from a task's labels via the existing atomic-write path. Idempotent: a no-op (no file write) when the label is absent. Throws on unknown task ID using the standard mutations.ts message format. Used by the CLI gate clear subcommand (FORGE-7.3) and indirectly by the skill flow (FORGE-7.4) when the user answers y.",
+      "design": "HOW: In src/lib/tasks/mutations.ts, add: export async function clearGate(id: string, cwd?: string): Promise<void>. Pattern mirrors addLabel (mutations.ts:645-657) exactly: `const root = resolveRepoRoot(cwd); const { filePath } = findTaskInRoot(id, root);` then `withLock(filePath, () => { ... })`. cwd? threading + the resolveRepoRoot → findTaskInRoot shape matches the canonical mutation pattern at addDep (mutations.ts:256), removeDep (:284), addComment (:487), addLabel (:645). On unknown ID, do NOT explicitly throw — let findTaskInRoot's throw at io.ts:285 (`Task \"${taskId}\" not found in any tasks.json file.`) bubble naturally. Inside withLock: `const { data, taskIndex } = reloadTask(filePath, id); const task = data.tasks[taskIndex];` then `const newLabels = task.labels.filter(l => l !== GATE_LABEL_HUMAN);`. If `newLabels.length === task.labels.length` → return early WITHOUT writing — this is the no-write path (mirrors addLabel's `if (!task.labels.includes(label))` guard at :652). Else: `task.labels = newLabels; writeTasksFileRaw(filePath, data);`. NO status guard — clearGate works on closed tasks, mirroring addLabel's permissive contract (addLabel has no status check; see body at :645-657). Defensive: filter removes ALL instances of GATE_LABEL_HUMAN, so a task with duplicate labels ends up with zero.",
+      "acceptance": [
+        "clearGate(id) removes GATE_LABEL_HUMAN from the named task's labels and persists the change.",
+        "clearGate(id) is idempotent: a second call on the same task is a no-op.",
+        "When the label is absent, no file write occurs — verified by capturing tasks.json mtime + content hash before and after the call (Bun + APFS update mtime even on identical content, so mtime-equal proves no write occurred; hash is belt-and-suspenders).",
+        "clearGate(\"UNKNOWN-ID\") throws with the literal message format Task \"UNKNOWN-ID\" not found in any tasks.json file.; tasks.json on disk is unmodified.",
+        "Duplicate labels: a task with two gate:human entries in labels[] ends up with zero after clearGate; assertion labels.filter(l => l === GATE_LABEL_HUMAN).length === 0 holds (in addition to !labels.includes(GATE_LABEL_HUMAN)).",
+        "clearGate on a closed task (status: closed) succeeds and removes the label — no status guard, mirroring addLabel's permissive contract.",
+        "cwd parameter threads correctly: clearGate(id, tmpDir) operates against tmpDir/plans/, not process.cwd(). Test runs without process.chdir.",
+        "pnpm test passes; pnpm typecheck passes."
+      ],
+      "notes": "Files: src/lib/tasks/mutations.ts (add clearGate), src/lib/__tests__/tasks.test.ts (extend with idempotence/no-write/dup-removal/closed-task/cwd-threading tests). Independent of FORGE-7.1 — operates only on the persisted labels[] array. | clearGate mirrors addLabel's signature and locking pattern; the only difference is the filter direction. | The Bun+APFS mtime characteristic is what makes the no-write AC observable; if Bun ever batches writes differently, the hash assertion is the fallback contract.",
+      "dependencies": [],
+      "comments": [],
+      "closeReason": null
+    },
+    {
+      "id": "FORGE-7.3",
+      "title": "Dispatcher: forge tasks gate clear <id>",
+      "status": "open",
+      "priority": 2,
+      "labels": [
+        "complexity:3",
+        "phase:5"
+      ],
+      "description": "WHAT: Add the gate subcommand to the tasks dispatcher with a clear <task-id> action. Wires user-facing CLI to FORGE-7.2's clearGate mutation. RESERVED gains gate. No new VALUE_FLAGS or BOOLEAN_FLAGS — Phase 5 introduces no flags.",
+      "design": "HOW: In src/commands/tasks.ts: (1) RESERVED at lines 44-48 gains \"gate\". (2) The dispatcher switch at lines 403-420 gains `case \"gate\": return handleGate(positional, json, cwd);` — same call style as handleClose/handleDep. (3) Add `async function handleGate(positional: string[], json: boolean, cwd: string): Promise<void>`. CRITICAL positional indexing — mirror handleDep at tasks.ts:612-615 where positional[0] is the subcommand and positional[1] is the action: positional[0]=\"gate\", positional[1]=action, positional[2]=task-id. Read `action = positional[1]; taskId = positional[2]`. (4) If `action !== \"clear\"`, call `fail(\\`Unknown gate subcommand: ${action ?? '(none)'}. Available: clear. Usage: forge tasks gate clear <task-id>\\`)` — exact mirror of handleEpic at tasks.ts:486 (template, punctuation, (none) sentinel). fail() exits 2. (5) If !taskId, call `fail(\"Usage: forge tasks gate clear <task-id>\")` mirroring handleDep:618. (6) `try { await clearGate(taskId, cwd); } catch (err) { fail((err as Error).message); }` — clearGate's not-found error surfaces verbatim, no re-formatting at the CLI layer (mirrors handleClose at tasks.ts:605-606). (7) On success: silent exit 0 (no JSON envelope; matches handleLabel idempotent style). (8) Update TASKS_HELP at lines 68-93: add a `gate clear <task-id>` row to the Subcommands list (matching the existing column alignment), and add a SUBCOMMAND_HELP[\"gate\"] entry describing usage and behavior of the `clear` action.",
+      "acceptance": [
+        "forge tasks gate clear <id> on a labelled task removes GATE_LABEL_HUMAN and exits 0.",
+        "forge tasks gate clear <id> a second time on the same task is a no-op (exit 0, no diff in tasks.json).",
+        "forge tasks gate clear UNKNOWN-ID exits non-zero with stderr containing the literal Task \"UNKNOWN-ID\" not found in any tasks.json file.; tasks.json is unmodified.",
+        "forge tasks gate (no action) exits 2 with stderr containing the literal Unknown gate subcommand.",
+        "forge tasks gate foo exits 2 with stderr containing Unknown gate subcommand: foo.",
+        "RESERVED contains 'gate'. No new entries added to VALUE_FLAGS or BOOLEAN_FLAGS in this task.",
+        "forge tasks --help (top-level) and forge tasks gate --help include the gate subcommand entries.",
+        "pnpm test passes; pnpm typecheck passes."
+      ],
+      "notes": "Files: src/commands/tasks.ts (add RESERVED entry, dispatcher case, handleGate function, help text), src/commands/__tests__/tasks.test.ts (extend with gate/clear integration tests). Depends on FORGE-7.2's clearGate. | Positional-index off-by-one is the exact recurring round-3 catch from the multi-round-review memory — the dispatcher does NOT shift args, so positional[0] is ALWAYS the subcommand, never the action. handleDep at tasks.ts:612-615 is the canonical reference. | Error vocabulary matches handleEpic:486 to keep the dispatcher's user-facing language consistent.",
+      "dependencies": [
+        "FORGE-7.2"
+      ],
+      "comments": [],
+      "closeReason": null
+    },
+    {
+      "id": "FORGE-7.4",
+      "title": "Skill prompt: human-gated task gate in plugin/commands/run.md",
+      "status": "open",
+      "priority": 2,
+      "labels": [
+        "complexity:2",
+        "phase:5"
+      ],
+      "description": "WHAT: Add the human-gate prompt and decision logic to plugin/commands/run.md so /forge:run interactively asks the user before dispatching any task with gated=true. Closes plan AC5 (skill markdown grep). Sets up the manual-QA bullet (plan AC6) for the phase PR description.",
+      "design": "HOW: (1) Edit plugin/commands/run.md. Add a section before the dispatch loop describing the gated-task gate. The section MUST contain: (a) the literal substring `is human-gated`; (b) the literal substring `forge tasks gate clear`; (c) the prompt template `<id> is human-gated.\\n  Title: <title>\\n  Have you completed the prerequisite? (y/N)`; (d) the decision logic — `y` calls `forge tasks gate clear <id>` then proceeds with normal dispatch on that task; `N` (default — Enter without input) skips to the next ready task without modifying it; anything other than y/Y is treated as N. The gated boolean comes from FORGE-7.1's addition to the ReadyTask/JSON shape. (2) End-to-end binding test in src/commands/__tests__/run.test.ts: import the existing `tasks` dispatcher from `../tasks` (NOT routed through `run()`). NOTE on cwd: `tasks()` takes only `args: string[]` — there is no cwd parameter. Use the established pattern from src/commands/__tests__/tasks.test.ts:28-44: `let originalCwd: string;` then `beforeEach(() => { tmp = makeTmpDir(); originalCwd = process.cwd(); process.chdir(tmp); setupTestProject(tmp, \"TEST\"); ... });` and `afterEach(() => { process.chdir(originalCwd); ... });`. Bun's per-file sequential test execution makes this safe (the parallelism concern from the round-3-catches memory applies to within-file parallelism only). Test (a): readFileSync('plugin/commands/run.md') and assert the captured text contains `forge tasks gate clear` (string match). Test (b): with the chdir'd tmp containing forge.json (via setupTestProject) but no FAKE-1 task, spy on console.error to capture stderr. Invoke `await tasks(['gate', 'clear', 'FAKE-1'])` (no cwd arg — relies on the chdir'd cwd) inside try/catch. Assert errorSpy.mock.calls.flat().join('') contains the literal `Task \"FAKE-1\" not found` — POSITIVE assertion. Why positive: this string only fires if the dispatcher routes `gate clear FAKE-1` through to clearGate; if `clear` is later renamed to `release`, the renamed path emits `Unknown gate subcommand` (per FORGE-7.3 spec) instead of reaching clearGate, and this assertion fails — catching the rename. (3) No source-side .ts file changes outside the new test in run.test.ts.",
+      "acceptance": [
+        "plugin/commands/run.md contains the literal substring 'is human-gated'.",
+        "plugin/commands/run.md contains the literal substring 'forge tasks gate clear'.",
+        "Decision logic documented in markdown: y -> call forge tasks gate clear <id> then proceed; N or default -> skip to next ready task without modifying.",
+        "End-to-end binding test in src/commands/__tests__/run.test.ts imports tasks from ../tasks (NOT via run()) and asserts both: (a) plugin/commands/run.md (read via readFileSync) contains 'forge tasks gate clear', AND (b) tasks(['gate', 'clear', 'FAKE-1']) against a fixture without FAKE-1 emits stderr containing the literal Task \"FAKE-1\" not found — positive presence assertion proving the dispatcher routes gate clear through handleGate to clearGate.",
+        "No .ts source-file changes outside the new test (this task is markdown + test only).",
+        "Manual QA per plan AC6 is recorded in the phase PR description (add a gate:human label to a test task, run /forge:run cli-iteration-mode, confirm the prompt appears and N skips). NOT a CI gate, not in this task's tests.",
+        "pnpm test passes."
+      ],
+      "notes": "Files: plugin/commands/run.md (add section), src/commands/__tests__/run.test.ts (extend with binding test). Depends on FORGE-7.1 (gated field flows through JSON to skill) and FORGE-7.3 (the forge tasks gate clear subcommand the prompt invokes). | The positive-presence binding-test assertion was set up in v5 of the decomposition review specifically to catch a rename of the clear action to anything else — round 4 caught a regression where the earlier negative-absence formulation was vacuously true.",
+      "dependencies": [
+        "FORGE-7.1",
+        "FORGE-7.3"
+      ],
+      "comments": [],
+      "closeReason": null
     }
   ]
 }
