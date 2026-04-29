@@ -499,7 +499,7 @@
     {
       "id": "FORGE-6.2",
       "title": "validate.ts: structured ValidationResult (severity-aware) + type-conformance rule",
-      "status": "in_progress",
+      "status": "closed",
       "priority": 1,
       "labels": [
         "complexity:5",
@@ -527,12 +527,12 @@
         "FORGE-6.1"
       ],
       "comments": [],
-      "closeReason": null
+      "closeReason": "Implemented; two-pass file loading + 9 mechanical updates + 6 new tests; review PASS."
     },
     {
       "id": "FORGE-6.3",
       "title": "validate.ts: empty acceptance[] warning rule (open tasks only)",
-      "status": "open",
+      "status": "closed",
       "priority": 2,
       "labels": [
         "complexity:2",
@@ -554,12 +554,12 @@
         "FORGE-6.2"
       ],
       "comments": [],
-      "closeReason": null
+      "closeReason": "Implemented in worktree-agent commit; cherry-picked clean to feature branch; +6 tests; agent self-reported PASS."
     },
     {
       "id": "FORGE-6.4",
       "title": "validate.ts: orphan-label info rule (bare labels only, ':'-prefix carve-out)",
-      "status": "open",
+      "status": "closed",
       "priority": 2,
       "labels": [
         "complexity:4",
@@ -583,12 +583,12 @@
         "FORGE-6.2"
       ],
       "comments": [],
-      "closeReason": null
+      "closeReason": "Implemented in worktree-agent commit; cherry-picked with merge resolution (rule 6 sequenced after rule 5); +10 tests including FORGE-6.5 regex contract assertion; agent PASS."
     },
     {
       "id": "FORGE-6.5",
       "title": "tasks.ts: validate summary line + severity-to-stream + exit-code mapping",
-      "status": "open",
+      "status": "in_progress",
       "priority": 2,
       "labels": [
         "complexity:3",

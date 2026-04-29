@@ -771,16 +771,29 @@ async function handleValidate(positional: string[], json: boolean, project: bool
 
   if (json) {
     console.log(JSON.stringify(result, null, 2));
-  } else if (result.valid) {
-    console.log("DAG is valid. No errors found.");
   } else {
-    console.error(`DAG validation found ${result.errors.length} error(s):\n`);
-    for (const err of result.errors) {
-      console.error(`  [${err.type}] ${err.message}`);
+    // Errors → stderr (existing two-space-indent format).
+    if (result.errors.length > 0) {
+      console.error(`DAG validation found ${result.errors.length} error(s):\n`);
+      for (const err of result.errors) {
+        console.error(`  [${err.type}] ${err.message}`);
+      }
     }
+    // Warnings → stderr with `warning:` severity prefix.
+    for (const w of result.warnings) {
+      console.error(`warning: [${w.type}] ${w.message}`);
+    }
+    // Info → stderr with `info:` severity prefix.
+    for (const i of result.info) {
+      console.error(`info: [${i.type}] ${i.message}`);
+    }
+    // Summary → stdout, ALWAYS last. Plurality is intentionally fixed for
+    // grep stability — do not pluralize-correct (`1 errors`, `1 warnings`).
+    console.log(`validate: ${result.errors.length} errors, ${result.warnings.length} warnings`);
   }
 
-  if (!result.valid) process.exit(1);
+  // Exit 1 only when errors exist; warnings and info never block.
+  if (result.errors.length > 0) process.exit(1);
 }
 
 // ── List handler ────────────────────────────────────────
