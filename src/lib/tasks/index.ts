@@ -13,6 +13,7 @@ export {
   GATE_LABEL_HUMAN,
   PHASE_LABEL_PREFIX,
   COMMIT_PLAN_TEMPLATE,
+  RECOVERY_HINT,
   type TaskStatus,
   type Comment,
   type Epic,

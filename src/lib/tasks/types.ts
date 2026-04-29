@@ -12,6 +12,15 @@ export const GATE_LABEL_HUMAN = "gate:human";
 export const PHASE_LABEL_PREFIX = "phase:";
 export const COMMIT_PLAN_TEMPLATE = "chore(<feature>): add Phase <N> plan + tasks";
 
+/**
+ * Standard recovery hint appended to every readTasksFile error message.
+ * The literal substring "forge tasks update" is the load-bearing contract
+ * (the durable mutation command, always available); "forge tasks edit" is
+ * preferred when ergonomics matter and is included since Phase 2 shipped.
+ */
+export const RECOVERY_HINT =
+  "Run `forge tasks edit <task-id>` (or `forge tasks update`) to fix the field, or hand-edit tasks.json carefully.";
+
 // ─── Types ────────────────────────────────────────────────────────────
 
 export type TaskStatus = "open" | "in_progress" | "closed";
@@ -66,7 +75,14 @@ export interface ReadyTask {
 }
 
 export interface ValidationError {
-  type: "cycle" | "orphan-dep" | "orphan-epic" | "duplicate-id";
+  type:
+    | "cycle"
+    | "orphan-dep"
+    | "orphan-epic"
+    | "duplicate-id"
+    | "type-conformance"
+    | "empty-acceptance"
+    | "orphan-label";
   message: string;
   ids: string[];
 }
@@ -74,6 +90,8 @@ export interface ValidationError {
 export interface ValidationResult {
   valid: boolean;
   errors: ValidationError[];
+  warnings: ValidationError[];
+  info: ValidationError[];
 }
 
 export type ValidateScope =

@@ -10,6 +10,7 @@ import {
   SCHEMA_VERSION,
   TASKS_FILENAME,
   MAX_NESTING_DEPTH,
+  RECOVERY_HINT,
   discoverTaskFiles,
   readTasksFile,
   readProjectPrefix,
@@ -69,6 +70,14 @@ describe("constants", () => {
 
   it("MAX_NESTING_DEPTH is 3", () => {
     expect(MAX_NESTING_DEPTH).toBe(3);
+  });
+
+  it("RECOVERY_HINT contains literal substring 'forge tasks update'", () => {
+    expect(RECOVERY_HINT).toContain("forge tasks update");
+  });
+
+  it("RECOVERY_HINT contains literal substring 'forge tasks edit'", () => {
+    expect(RECOVERY_HINT).toContain("forge tasks edit");
   });
 });
 
@@ -1838,6 +1847,321 @@ describe("validateDag", () => {
   });
 });
 
+// ─── validateDag — structured result (warnings/info + type-conformance) ──
+
+describe("validateDag — structured result", () => {
+  let tmpDir: string;
+  beforeEach(() => { tmpDir = makeTmpDir(); setupProject(tmpDir, "FORGE"); });
+  afterEach(() => { rmSync(tmpDir, { recursive: true, force: true }); });
+
+  it("result shape always includes warnings: [] and info: [] arrays even when empty", () => {
+    setupFeature(tmpDir, "auth", { version: 1, epics: [{ id: "FORGE-1", title: "Auth", created: "2026-03-30" }], tasks: [] });
+    const result = validateDag({ kind: "feature", name: "auth" }, tmpDir);
+    expect(result.warnings).toEqual([]);
+    expect(result.info).toEqual([]);
+  });
+
+  it("early-exit (target file missing) returns full result shape", () => {
+    const result = validateDag({ kind: "feature", name: "nonexistent" }, tmpDir);
+    expect(result.valid).toBe(false);
+    expect(result.errors).toHaveLength(1);
+    expect(result.warnings).toEqual([]);
+    expect(result.info).toEqual([]);
+  });
+
+  it("malformed target file → type-conformance error and early return", () => {
+    // Write a malformed tasks.json (acceptance must be string[] but is "a string")
+    const featureDir = join(tmpDir, "plans", "auth");
+    mkdirSync(featureDir, { recursive: true });
+    writeFileSync(join(featureDir, "tasks.json"), JSON.stringify({
+      version: 1,
+      epics: [{ id: "FORGE-1", title: "Auth", created: "2026-03-30" }],
+      tasks: [{
+        id: "FORGE-1.1", title: "T", status: "open", priority: 2, labels: [],
+        description: "", design: "", acceptance: "a string", notes: "",
+        dependencies: [], comments: [], closeReason: null,
+      }],
+    }));
+    const result = validateDag({ kind: "feature", name: "auth" }, tmpDir);
+    expect(result.valid).toBe(false);
+    expect(result.errors).toHaveLength(1); // early-return — no other rules ran
+    expect(result.errors[0].type).toBe("type-conformance");
+    expect(result.errors[0].message).toContain("acceptance");
+    expect(result.errors[0].message).toContain("forge tasks update");
+    expect(result.warnings).toEqual([]);
+    expect(result.info).toEqual([]);
+  });
+
+  it("malformed non-target file → silently skipped, target validation continues", () => {
+    // Target file: well-formed, but has a cycle (so we expect cycle error to surface).
+    setupFeature(tmpDir, "auth", { version: 1, epics: [{ id: "FORGE-1", title: "Auth", created: "2026-03-30" }], tasks: [
+      { id: "FORGE-1.1", title: "A", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: ["FORGE-1.2"], comments: [], closeReason: null },
+      { id: "FORGE-1.2", title: "B", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: ["FORGE-1.1"], comments: [], closeReason: null },
+    ] });
+    // Non-target file: malformed (priority should be number, not string).
+    const otherDir = join(tmpDir, "plans", "other");
+    mkdirSync(otherDir, { recursive: true });
+    writeFileSync(join(otherDir, "tasks.json"), JSON.stringify({
+      version: 1,
+      epics: [{ id: "FORGE-2", title: "Other", created: "2026-03-30" }],
+      tasks: [{
+        id: "FORGE-2.1", title: "B", status: "open", priority: "high", labels: [],
+        description: "", design: "", acceptance: [], notes: "",
+        dependencies: [], comments: [], closeReason: null,
+      }],
+    }));
+    const result = validateDag({ kind: "feature", name: "auth" }, tmpDir);
+    expect(result.errors.some((e) => e.type === "type-conformance")).toBe(false); // malformed file NOT surfaced
+    expect(result.errors.some((e) => e.type === "cycle")).toBe(true); // target's cycle still caught
+  });
+
+  it("final return uses literal-key order { valid, errors, warnings, info } (deterministic JSON)", () => {
+    setupFeature(tmpDir, "auth", { version: 1, epics: [{ id: "FORGE-1", title: "Auth", created: "2026-03-30" }], tasks: [] });
+    const result = validateDag({ kind: "feature", name: "auth" }, tmpDir);
+    const json = JSON.stringify(result);
+    // Insertion-order asserts: valid before errors before warnings before info.
+    expect(json).toMatch(/^\{"valid":[^"]+"errors":\[\]/);
+    const keys = Object.keys(result);
+    expect(keys).toEqual(["valid", "errors", "warnings", "info"]);
+  });
+});
+
+// ─── validateDag — empty-acceptance warning ─────────────────────────
+
+describe("validateDag — empty-acceptance warning", () => {
+  let tmpDir: string;
+  beforeEach(() => { tmpDir = makeTmpDir(); setupProject(tmpDir, "FORGE"); });
+  afterEach(() => { rmSync(tmpDir, { recursive: true, force: true }); });
+
+  it("open task with empty acceptance[] produces a warning entry (type 'empty-acceptance', message contains task ID)", () => {
+    setupFeature(tmpDir, "auth", { version: 1, epics: [{ id: "FORGE-1", title: "Auth", created: "2026-03-30" }], tasks: [
+      { id: "FORGE-1.1", title: "Open empty", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: null },
+    ] });
+    const result = validateDag({ kind: "feature", name: "auth" }, tmpDir);
+    const warning = result.warnings.find((w) => w.type === "empty-acceptance");
+    expect(warning).toBeDefined();
+    expect(warning!.type).toBe("empty-acceptance");
+    expect(warning!.message).toContain("FORGE-1.1");
+    expect(warning!.ids).toEqual(["FORGE-1.1"]);
+  });
+
+  it("closed task with empty acceptance[] does NOT produce a warning", () => {
+    setupFeature(tmpDir, "auth", { version: 1, epics: [{ id: "FORGE-1", title: "Auth", created: "2026-03-30" }], tasks: [
+      { id: "FORGE-1.1", title: "Closed empty", status: "closed", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: "done" },
+    ] });
+    const result = validateDag({ kind: "feature", name: "auth" }, tmpDir);
+    expect(result.warnings.some((w) => w.type === "empty-acceptance")).toBe(false);
+  });
+
+  it("in_progress task with empty acceptance[] does NOT produce a warning", () => {
+    setupFeature(tmpDir, "auth", { version: 1, epics: [{ id: "FORGE-1", title: "Auth", created: "2026-03-30" }], tasks: [
+      { id: "FORGE-1.1", title: "WIP empty", status: "in_progress", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: null },
+    ] });
+    const result = validateDag({ kind: "feature", name: "auth" }, tmpDir);
+    expect(result.warnings.some((w) => w.type === "empty-acceptance")).toBe(false);
+  });
+
+  it("open task with populated acceptance[] does NOT produce a warning", () => {
+    setupFeature(tmpDir, "auth", { version: 1, epics: [{ id: "FORGE-1", title: "Auth", created: "2026-03-30" }], tasks: [
+      { id: "FORGE-1.1", title: "Open populated", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: ["x"], notes: "", dependencies: [], comments: [], closeReason: null },
+    ] });
+    const result = validateDag({ kind: "feature", name: "auth" }, tmpDir);
+    expect(result.warnings.some((w) => w.type === "empty-acceptance")).toBe(false);
+  });
+
+  it("warning lands in result.warnings (not result.errors); result.valid stays true", () => {
+    setupFeature(tmpDir, "auth", { version: 1, epics: [{ id: "FORGE-1", title: "Auth", created: "2026-03-30" }], tasks: [
+      { id: "FORGE-1.1", title: "Open empty", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: null },
+    ] });
+    const result = validateDag({ kind: "feature", name: "auth" }, tmpDir);
+    expect(result.errors.some((e) => e.type === "empty-acceptance")).toBe(false);
+    expect(result.warnings.some((w) => w.type === "empty-acceptance")).toBe(true);
+    expect(result.valid).toBe(true);
+  });
+
+  it("covers all four state combinations in a single fixture", () => {
+    setupFeature(tmpDir, "auth", { version: 1, epics: [{ id: "FORGE-1", title: "Auth", created: "2026-03-30" }], tasks: [
+      { id: "FORGE-1.1", title: "Open empty", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: null },
+      { id: "FORGE-1.2", title: "Closed empty", status: "closed", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: "done" },
+      { id: "FORGE-1.3", title: "WIP empty", status: "in_progress", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: null },
+      { id: "FORGE-1.4", title: "Open populated", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: ["x"], notes: "", dependencies: [], comments: [], closeReason: null },
+    ] });
+    const result = validateDag({ kind: "feature", name: "auth" }, tmpDir);
+    const emptyAccept = result.warnings.filter((w) => w.type === "empty-acceptance");
+    expect(emptyAccept).toHaveLength(1);
+    expect(emptyAccept[0].ids).toEqual(["FORGE-1.1"]);
+    expect(result.valid).toBe(true);
+  });
+});
+
+// ─── validateDag — orphan-label info ────────────────────────────────
+
+describe("validateDag — orphan-label info", () => {
+  let tmpDir: string;
+  beforeEach(() => { tmpDir = makeTmpDir(); setupProject(tmpDir, "FORGE"); });
+  afterEach(() => { rmSync(tmpDir, { recursive: true, force: true }); });
+
+  function makeTask(id: string, labels: string[]): Task {
+    return {
+      id,
+      title: `t-${id}`,
+      status: "open",
+      priority: 2,
+      labels,
+      description: "",
+      design: "",
+      acceptance: ["a"],
+      notes: "",
+      dependencies: [],
+      comments: [],
+      closeReason: null,
+    };
+  }
+
+  it("emits info entry for a bare label appearing on exactly one task in a sibling group", () => {
+    const tasks: Task[] = [
+      makeTask("FORGE-1.1", ["frontend"]),
+      makeTask("FORGE-1.2", []),
+      makeTask("FORGE-1.3", []),
+    ];
+    setupFeature(tmpDir, "auth", { version: 1, epics: [{ id: "FORGE-1", title: "Auth", created: "2026-03-30" }], tasks });
+    const result = validateDag({ kind: "feature", name: "auth" }, tmpDir);
+    const orphans = result.info.filter((e) => e.type === "orphan-label");
+    expect(orphans).toHaveLength(1);
+    expect(orphans[0].ids).toEqual(["FORGE-1.1"]);
+    expect(orphans[0].message).toBe("Label 'frontend' on task FORGE-1.1 appears on only one task in the FORGE-1 sibling group");
+    // Matches the regex anchored by handleValidate's locked output format.
+    expect(orphans[0].message).toMatch(/^Label '.+' on task FORGE-\S+ appears on only one task in the FORGE-\S+ sibling group$/);
+  });
+
+  it("does NOT flag the other tasks in the group (only the orphan-bearing one)", () => {
+    const tasks: Task[] = [
+      makeTask("FORGE-1.1", ["frontend"]),
+      makeTask("FORGE-1.2", []),
+      makeTask("FORGE-1.3", []),
+    ];
+    setupFeature(tmpDir, "auth", { version: 1, epics: [{ id: "FORGE-1", title: "Auth", created: "2026-03-30" }], tasks });
+    const result = validateDag({ kind: "feature", name: "auth" }, tmpDir);
+    const orphanIds = result.info.filter((e) => e.type === "orphan-label").flatMap((e) => e.ids);
+    expect(orphanIds).not.toContain("FORGE-1.2");
+    expect(orphanIds).not.toContain("FORGE-1.3");
+  });
+
+  it("':'-carve-out: label 'phase:5' on exactly one task → no info entry", () => {
+    const tasks: Task[] = [
+      makeTask("FORGE-1.1", ["phase:5"]),
+      makeTask("FORGE-1.2", []),
+      makeTask("FORGE-1.3", []),
+    ];
+    setupFeature(tmpDir, "auth", { version: 1, epics: [{ id: "FORGE-1", title: "Auth", created: "2026-03-30" }], tasks });
+    const result = validateDag({ kind: "feature", name: "auth" }, tmpDir);
+    expect(result.info.filter((e) => e.type === "orphan-label")).toHaveLength(0);
+  });
+
+  it("':'-carve-out: label 'gate:human' on exactly one task → no info entry", () => {
+    const tasks: Task[] = [
+      makeTask("FORGE-1.1", ["gate:human"]),
+      makeTask("FORGE-1.2", []),
+      makeTask("FORGE-1.3", []),
+    ];
+    setupFeature(tmpDir, "auth", { version: 1, epics: [{ id: "FORGE-1", title: "Auth", created: "2026-03-30" }], tasks });
+    const result = validateDag({ kind: "feature", name: "auth" }, tmpDir);
+    expect(result.info.filter((e) => e.type === "orphan-label")).toHaveLength(0);
+  });
+
+  it("':'-carve-out: label 'complexity:4' on exactly one task → no info entry", () => {
+    const tasks: Task[] = [
+      makeTask("FORGE-1.1", ["complexity:4"]),
+      makeTask("FORGE-1.2", []),
+      makeTask("FORGE-1.3", []),
+    ];
+    setupFeature(tmpDir, "auth", { version: 1, epics: [{ id: "FORGE-1", title: "Auth", created: "2026-03-30" }], tasks });
+    const result = validateDag({ kind: "feature", name: "auth" }, tmpDir);
+    expect(result.info.filter((e) => e.type === "orphan-label")).toHaveLength(0);
+  });
+
+  it("count > 1: bare label shared by 2 of 3 siblings → no info entry", () => {
+    const tasks: Task[] = [
+      makeTask("FORGE-1.1", ["frontend"]),
+      makeTask("FORGE-1.2", ["frontend"]),
+      makeTask("FORGE-1.3", []),
+    ];
+    setupFeature(tmpDir, "auth", { version: 1, epics: [{ id: "FORGE-1", title: "Auth", created: "2026-03-30" }], tasks });
+    const result = validateDag({ kind: "feature", name: "auth" }, tmpDir);
+    expect(result.info.filter((e) => e.type === "orphan-label")).toHaveLength(0);
+  });
+
+  it("depth ≤ 1 IDs (epic-shaped) are skipped — no info entries for top-level items", () => {
+    // FORGE-1, FORGE-2, FORGE-3 are depth 1 — siblings of nothing meaningful.
+    // We can't put them into tasks.json easily because they look like epics, but
+    // we can simulate by writing tasks at depth 1 (e.g. FORGE-7 directly).
+    // Use depth-1 task IDs that match the project prefix.
+    const tasks: Task[] = [
+      makeTask("FORGE-1", ["frontend"]),
+      makeTask("FORGE-2", []),
+      makeTask("FORGE-3", []),
+    ];
+    // No epic for these (orphan-epic will fire), but we only care about info.
+    setupFeature(tmpDir, "auth", { version: 1, epics: [
+      { id: "FORGE-1", title: "E1", created: "2026-03-30" },
+      { id: "FORGE-2", title: "E2", created: "2026-03-30" },
+      { id: "FORGE-3", title: "E3", created: "2026-03-30" },
+    ], tasks });
+    const result = validateDag({ kind: "feature", name: "auth" }, tmpDir);
+    expect(result.info.filter((e) => e.type === "orphan-label")).toHaveLength(0);
+  });
+
+  it("per-group, NOT global: label is orphan in one group, shared in another → info fires only where orphan", () => {
+    const tasks: Task[] = [
+      // Group FORGE-1: 'frontend' appears once → orphan in this group
+      makeTask("FORGE-1.1", ["frontend"]),
+      makeTask("FORGE-1.2", []),
+      makeTask("FORGE-1.3", []),
+      // Group FORGE-2: 'frontend' shared by 2 → not orphan
+      makeTask("FORGE-2.1", ["frontend"]),
+      makeTask("FORGE-2.2", ["frontend"]),
+      makeTask("FORGE-2.3", []),
+    ];
+    setupFeature(tmpDir, "auth", { version: 1, epics: [
+      { id: "FORGE-1", title: "E1", created: "2026-03-30" },
+      { id: "FORGE-2", title: "E2", created: "2026-03-30" },
+    ], tasks });
+    const result = validateDag({ kind: "feature", name: "auth" }, tmpDir);
+    const orphans = result.info.filter((e) => e.type === "orphan-label");
+    expect(orphans).toHaveLength(1);
+    expect(orphans[0].ids).toEqual(["FORGE-1.1"]);
+    expect(orphans[0].message).toContain("FORGE-1 sibling group");
+  });
+
+  it("info entries land in result.info; result.warnings and result.valid are unaffected", () => {
+    const tasks: Task[] = [
+      makeTask("FORGE-1.1", ["frontend"]),
+      makeTask("FORGE-1.2", []),
+      makeTask("FORGE-1.3", []),
+    ];
+    setupFeature(tmpDir, "auth", { version: 1, epics: [{ id: "FORGE-1", title: "Auth", created: "2026-03-30" }], tasks });
+    const result = validateDag({ kind: "feature", name: "auth" }, tmpDir);
+    expect(result.info.length).toBeGreaterThan(0);
+    expect(result.warnings).toEqual([]);
+    expect(result.valid).toBe(true);
+  });
+
+  it("deeper depths: depth-3 siblings (e.g. FORGE-1.1.1) form their own sibling group keyed by FORGE-1.1", () => {
+    const tasks: Task[] = [
+      makeTask("FORGE-1.1", []),
+      makeTask("FORGE-1.1.1", ["backend"]),
+      makeTask("FORGE-1.1.2", []),
+      makeTask("FORGE-1.1.3", []),
+    ];
+    setupFeature(tmpDir, "auth", { version: 1, epics: [{ id: "FORGE-1", title: "Auth", created: "2026-03-30" }], tasks });
+    const result = validateDag({ kind: "feature", name: "auth" }, tmpDir);
+    const orphans = result.info.filter((e) => e.type === "orphan-label");
+    expect(orphans).toHaveLength(1);
+    expect(orphans[0].ids).toEqual(["FORGE-1.1.1"]);
+    expect(orphans[0].message).toContain("FORGE-1.1 sibling group");
+  });
+});
+
 // ─── Auto-close cascade (grandparent) ───────────────────────────────
 
 describe("auto-close cascade", () => {
@@ -2129,6 +2453,229 @@ describe("readTasksFile schema validation", () => {
     const filePath = join(tmpDir, "tasks.json");
     writeFileSync(filePath, JSON.stringify({ version: 1, epics: [], tasks: [] }));
     const result = readTasksFile(filePath);
+    expect(result).not.toBeNull();
+    expect(result!.epics).toEqual([]);
+    expect(result!.tasks).toEqual([]);
+  });
+});
+
+// ─── readTasksFile field-shape validation ────────────────────────────
+
+describe("readTasksFile field-shape validation", () => {
+  let tmpDir: string;
+  beforeEach(() => { tmpDir = makeTmpDir(); });
+  afterEach(() => { rmSync(tmpDir, { recursive: true, force: true }); });
+
+  function writeTaskWithOverride(overrides: Record<string, unknown>): string {
+    const baseTask = {
+      id: "T-001",
+      title: "Test",
+      status: "open",
+      priority: 2,
+      labels: [],
+      description: "",
+      design: "",
+      acceptance: [],
+      notes: "",
+      dependencies: [],
+      comments: [],
+      closeReason: null,
+    };
+    const fp = join(tmpDir, "tasks.json");
+    writeFileSync(fp, JSON.stringify({
+      version: 1,
+      epics: [],
+      tasks: [{ ...baseTask, ...overrides }],
+    }));
+    return fp;
+  }
+
+  // ─── Per-field negative cases ───────────────────────────────────────
+
+  it("rejects non-string title", () => {
+    const fp = writeTaskWithOverride({ title: 123 });
+    expect(() => readTasksFile(fp)).toThrow(/field title must be string/);
+    try { readTasksFile(fp); } catch (e: any) { expect(e.message).toContain("forge tasks update"); }
+  });
+
+  it("rejects non-number priority", () => {
+    const fp = writeTaskWithOverride({ priority: "high" });
+    expect(() => readTasksFile(fp)).toThrow(/field priority must be number/);
+    try { readTasksFile(fp); } catch (e: any) { expect(e.message).toContain("forge tasks update"); }
+  });
+
+  it("rejects non-array labels", () => {
+    const fp = writeTaskWithOverride({ labels: "auth" });
+    expect(() => readTasksFile(fp)).toThrow(/field labels must be string\[\]/);
+    try { readTasksFile(fp); } catch (e: any) { expect(e.message).toContain("forge tasks update"); }
+  });
+
+  it("rejects labels with non-string entry", () => {
+    const fp = writeTaskWithOverride({ labels: ["ok", 42] });
+    expect(() => readTasksFile(fp)).toThrow(/field labels must be string\[\]/);
+  });
+
+  it("rejects non-string description", () => {
+    const fp = writeTaskWithOverride({ description: null });
+    expect(() => readTasksFile(fp)).toThrow(/field description must be string/);
+    try { readTasksFile(fp); } catch (e: any) { expect(e.message).toContain("forge tasks update"); }
+  });
+
+  it("rejects non-string design", () => {
+    const fp = writeTaskWithOverride({ design: 0 });
+    expect(() => readTasksFile(fp)).toThrow(/field design must be string/);
+  });
+
+  it("rejects acceptance: 'a string' (reviewer-reported blind spot)", () => {
+    const fp = writeTaskWithOverride({ acceptance: "a string" });
+    expect(() => readTasksFile(fp)).toThrow(/field acceptance must be string\[\]/);
+    try { readTasksFile(fp); } catch (e: any) {
+      expect(e.message).toContain("acceptance");
+      expect(e.message).toContain("string[]");
+      expect(e.message).toContain("forge tasks update");
+    }
+  });
+
+  it("rejects acceptance with non-string entry", () => {
+    const fp = writeTaskWithOverride({ acceptance: ["ok", 99] });
+    expect(() => readTasksFile(fp)).toThrow(/field acceptance must be string\[\]/);
+  });
+
+  it("rejects non-string notes", () => {
+    const fp = writeTaskWithOverride({ notes: 42 });
+    expect(() => readTasksFile(fp)).toThrow(/field notes must be string/);
+  });
+
+  it("rejects non-array dependencies", () => {
+    const fp = writeTaskWithOverride({ dependencies: "T-002" });
+    expect(() => readTasksFile(fp)).toThrow(/field dependencies must be string\[\]/);
+  });
+
+  it("rejects dependencies with non-string entry", () => {
+    const fp = writeTaskWithOverride({ dependencies: ["T-002", null] });
+    expect(() => readTasksFile(fp)).toThrow(/field dependencies must be string\[\]/);
+  });
+
+  // ─── comments[] sub-cases ───────────────────────────────────────────
+
+  it("rejects comments not an array", () => {
+    const fp = writeTaskWithOverride({ comments: "a comment" });
+    expect(() => readTasksFile(fp)).toThrow(/field comments must be Comment\[\]/);
+  });
+
+  it("rejects comments entry missing message", () => {
+    const fp = writeTaskWithOverride({ comments: [{ timestamp: "2026-04-29T00:00:00Z" }] });
+    expect(() => readTasksFile(fp)).toThrow(/field comments must be Comment\[\]/);
+  });
+
+  it("rejects comments entry missing timestamp", () => {
+    const fp = writeTaskWithOverride({ comments: [{ message: "hi" }] });
+    expect(() => readTasksFile(fp)).toThrow(/field comments must be Comment\[\]/);
+  });
+
+  it("rejects comments entry with non-string message", () => {
+    const fp = writeTaskWithOverride({ comments: [{ message: 1, timestamp: "ts" }] });
+    expect(() => readTasksFile(fp)).toThrow(/field comments must be Comment\[\]/);
+  });
+
+  it("rejects comments entry with non-string timestamp", () => {
+    const fp = writeTaskWithOverride({ comments: [{ message: "hi", timestamp: 0 }] });
+    expect(() => readTasksFile(fp)).toThrow(/field comments must be Comment\[\]/);
+  });
+
+  // ─── closeReason: null | string ─────────────────────────────────────
+
+  it("accepts closeReason: null", () => {
+    const fp = writeTaskWithOverride({ closeReason: null });
+    expect(() => readTasksFile(fp)).not.toThrow();
+  });
+
+  it("accepts closeReason: string", () => {
+    const fp = writeTaskWithOverride({ closeReason: "completed" });
+    expect(() => readTasksFile(fp)).not.toThrow();
+  });
+
+  it("rejects closeReason: number", () => {
+    const fp = writeTaskWithOverride({ closeReason: 0 });
+    expect(() => readTasksFile(fp)).toThrow(/field closeReason must be string \| null/);
+  });
+
+  it("rejects closeReason: bool", () => {
+    const fp = writeTaskWithOverride({ closeReason: false });
+    expect(() => readTasksFile(fp)).toThrow(/field closeReason must be string \| null/);
+  });
+
+  // ─── Existing 7 throw sites: each contains 'forge tasks update' ─────
+
+  it("JSON-parse throw includes 'forge tasks update'", () => {
+    const fp = join(tmpDir, "bad.json");
+    writeFileSync(fp, "{ not json");
+    try { readTasksFile(fp); throw new Error("should have thrown"); }
+    catch (e: any) { expect(e.message).toContain("forge tasks update"); }
+  });
+
+  it("top-level shape throw includes 'forge tasks update'", () => {
+    const fp = join(tmpDir, "tasks.json");
+    writeFileSync(fp, JSON.stringify({ foo: "bar" }));
+    try { readTasksFile(fp); throw new Error("should have thrown"); }
+    catch (e: any) { expect(e.message).toContain("forge tasks update"); }
+  });
+
+  it("version-too-new throw includes 'forge tasks update'", () => {
+    const fp = join(tmpDir, "tasks.json");
+    writeFileSync(fp, JSON.stringify({ version: 999, epics: [], tasks: [] }));
+    try { readTasksFile(fp); throw new Error("should have thrown"); }
+    catch (e: any) { expect(e.message).toContain("forge tasks update"); }
+  });
+
+  it("epic-id throw includes 'forge tasks update'", () => {
+    const fp = join(tmpDir, "tasks.json");
+    writeFileSync(fp, JSON.stringify({ version: 1, epics: [{ title: "no id" }], tasks: [] }));
+    try { readTasksFile(fp); throw new Error("should have thrown"); }
+    catch (e: any) { expect(e.message).toContain("forge tasks update"); }
+  });
+
+  it("task-not-object throw includes 'forge tasks update'", () => {
+    const fp = join(tmpDir, "tasks.json");
+    writeFileSync(fp, JSON.stringify({ version: 1, epics: [], tasks: ["not-object"] }));
+    try { readTasksFile(fp); throw new Error("should have thrown"); }
+    catch (e: any) { expect(e.message).toContain("forge tasks update"); }
+  });
+
+  it("task-id throw includes 'forge tasks update'", () => {
+    const fp = join(tmpDir, "tasks.json");
+    writeFileSync(fp, JSON.stringify({ version: 1, epics: [], tasks: [{ status: "open" }] }));
+    try { readTasksFile(fp); throw new Error("should have thrown"); }
+    catch (e: any) { expect(e.message).toContain("forge tasks update"); }
+  });
+
+  it("task-status throw includes 'forge tasks update'", () => {
+    const fp = join(tmpDir, "tasks.json");
+    writeFileSync(fp, JSON.stringify({ version: 1, epics: [], tasks: [{ id: "T-1", status: "weird" }] }));
+    try { readTasksFile(fp); throw new Error("should have thrown"); }
+    catch (e: any) { expect(e.message).toContain("forge tasks update"); }
+  });
+
+  // ─── Version handling: unchanged semantics ──────────────────────────
+
+  it("version > SCHEMA_VERSION still throws (unchanged behavior)", () => {
+    const fp = join(tmpDir, "tasks.json");
+    writeFileSync(fp, JSON.stringify({ version: SCHEMA_VERSION + 1, epics: [], tasks: [] }));
+    expect(() => readTasksFile(fp)).toThrow(/schema version/);
+  });
+
+  it("version <= SCHEMA_VERSION loads without version-check firing", () => {
+    const fp = join(tmpDir, "tasks.json");
+    writeFileSync(fp, JSON.stringify({ version: SCHEMA_VERSION, epics: [], tasks: [] }));
+    expect(() => readTasksFile(fp)).not.toThrow();
+  });
+
+  // ─── Zero-data state ────────────────────────────────────────────────
+
+  it("loads empty epics[] / empty tasks[] without error (zero-data)", () => {
+    const fp = join(tmpDir, "tasks.json");
+    writeFileSync(fp, JSON.stringify({ version: 1, epics: [], tasks: [] }));
+    const result = readTasksFile(fp);
     expect(result).not.toBeNull();
     expect(result!.epics).toEqual([]);
     expect(result!.tasks).toEqual([]);

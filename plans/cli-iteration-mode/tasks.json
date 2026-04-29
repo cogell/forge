@@ -15,6 +15,11 @@
       "id": "FORGE-5",
       "title": "Phase 3: forge run orchestration — two-layer changes",
       "created": "2026-04-28"
+    },
+    {
+      "id": "FORGE-6",
+      "title": "Phase 4: Validation hardening — load-time + deeper validate",
+      "created": "2026-04-29"
     }
   ],
   "tasks": [
@@ -462,6 +467,155 @@
       ],
       "comments": [],
       "closeReason": "Skill markdown updated; 5 grep tests verify literal substrings + COMMIT_PLAN_TEMPLATE cross-check. Manual QA: dirty-detection behavior verified via helper-direct tests (real /forge:run invocation requires rebuilt forge binary)."
+    },
+    {
+      "id": "FORGE-6.1",
+      "title": "io.ts: extend readTasksFile structural check + RECOVERY_HINT constant",
+      "status": "closed",
+      "priority": 1,
+      "labels": [
+        "complexity:5",
+        "phase:4"
+      ],
+      "description": "WHAT: Extend the partial schema validation in readTasksFile (src/lib/tasks/io.ts:91-158) to cover every field on the Task interface. Currently it only checks epics[].id, tasks[].id, and tasks[].status. The reviewer-reported blind spot — a task with acceptance: 'a string' instead of string[] — must throw at the load boundary, not pass silently. Every error message thrown by readTasksFile (existing and new) must include the literal substring 'forge tasks update' as a recovery hint, anchored to a single named constant. The version-check at lines 122-127 stays exactly as-is.",
+      "design": "HOW:\n- In src/lib/tasks/types.ts, add: export const RECOVERY_HINT = \"Run `forge tasks edit <task-id>` (or `forge tasks update`) to fix the field, or hand-edit tasks.json carefully.\". The constant value MUST contain the literal substring \"forge tasks update\" (anchors plan AC2). Including \"forge tasks edit\" is permitted by the plan (\"preferred when available\") and is appropriate now because Phase 2 has shipped — both commands exist on main.\n- Re-export RECOVERY_HINT from src/lib/tasks/index.ts.\n- In src/lib/tasks/io.ts, extend the per-task validation loop at line 141 to additionally check, for each field on the Task interface:\n  - title: string\n  - priority: number\n  - labels: string[] (Array.isArray + every is string)\n  - description: string\n  - design: string\n  - acceptance: string[]  ← reviewer-reported blind spot\n  - notes: string\n  - dependencies: string[]\n  - comments: Comment[] (Array.isArray + each is { message: string, timestamp: string })\n  - closeReason: string | null\n- Each new error message format: `Invalid task <id> in <filePath>: field <name> must be <expected type>. ${RECOVERY_HINT}`.\n- Update ALL 7 EXISTING throw sites in readTasksFile to also append RECOVERY_HINT — confirmed by `grep -n \"throw new Error\" src/lib/tasks/io.ts`:\n  1. line 104 — JSON-parse failure\n  2. line 115 — top-level shape (epics/tasks not arrays)\n  3. line 124 — version-too-new\n  4. line 135 — epic at index N missing/non-string id\n  5. line 144 — task at index N not an object\n  6. line 148 — task at index N missing/non-string id\n  7. line 151 — task status invalid\n  Pattern: append `. ${RECOVERY_HINT}` to every existing message so the recovery substring is consistent.\n- Do NOT touch the version-check LOGIC at lines 122-123 — schema-version mismatch must continue to throw at the same condition. Only the MESSAGE gets the recovery-hint appended (the plan distinguishes \"tighten the version check\" from \"update the message\"; only the latter is in scope).\n- The validation runs on every read — list, show, ready, every mutation. No silent-partial-state fallbacks anywhere.",
+      "acceptance": [
+        "RECOVERY_HINT constant defined in src/lib/tasks/types.ts and re-exported from src/lib/tasks/index.ts; its value contains the literal substring `forge tasks update` AND the literal substring `forge tasks edit`.",
+        "A tasks.json with task.acceptance set to 'a string' (not an array) causes readTasksFile to throw. The error message names the field 'acceptance', the expected type 'string[]', and contains the substring `forge tasks update`.",
+        "Each of the 10 Task fields (title, priority, labels, description, design, acceptance, notes, dependencies, comments, closeReason) has a positive test (well-formed task loads) and a negative test (malformed value throws with the field name + expected type + `forge tasks update` substring).",
+        "comments[] negative cases: comments not an array; an entry missing message; an entry missing timestamp; an entry with non-string message — each throws with field name + `forge tasks update`.",
+        "closeReason accepts both null and a string; rejects undefined, number, bool, etc.",
+        "All 7 EXISTING throw sites in readTasksFile (lines 104/115/124/135/144/148/151 — JSON-parse, top-level shape, version-too-new, epic-id, task-not-object, task-id, task-status) now contain the substring `forge tasks update` in the thrown message — verified by per-site regression tests, one assertion per site.",
+        "Version handling unchanged: a tasks.json with version > SCHEMA_VERSION still throws the existing version-too-new error (now with the recovery hint appended); a file at SCHEMA_VERSION or earlier loads without the version check firing — covered by a non-regression test.",
+        "Empty tasks[] / empty epics[] arrays load successfully (zero-data state).",
+        "Every existing readTasksFile test continues to pass — assertions on the existing 7 throw-site messages are mechanically updated as part of THIS task to expect the appended `. ${RECOVERY_HINT}` suffix; no follow-up task is required for the assertion update.",
+        "pnpm test passes; pnpm typecheck passes."
+      ],
+      "notes": "Files: src/lib/tasks/types.ts (add RECOVERY_HINT constant), src/lib/tasks/io.ts (extend readTasksFile per-task loop + append RECOVERY_HINT to all 7 existing throws), src/lib/tasks/index.ts (re-export RECOVERY_HINT), src/lib/__tests__/tasks.test.ts (add positive + negative test per field, per-site regression tests, update existing throw-site assertions to expect the appended hint). Foundation task — FORGE-6.2 invokes the same load function and expects it to throw on shape mismatches. | RECOVERY_HINT mentions both `forge tasks edit` (preferred ergonomics) AND `forge tasks update` (the plan-locked substring) — Phase 2 shipped `edit`, so both are valid recovery paths and the constant captures both for users.",
+      "dependencies": [],
+      "comments": [],
+      "closeReason": "Implemented; 25 new tests covering all 10 fields + 7 throw-site regressions + version + zero-data; review PASS."
+    },
+    {
+      "id": "FORGE-6.2",
+      "title": "validate.ts: structured ValidationResult (severity-aware) + type-conformance rule",
+      "status": "closed",
+      "priority": 1,
+      "labels": [
+        "complexity:5",
+        "phase:4"
+      ],
+      "description": "WHAT: Extend ValidationResult to carry warnings and info entries alongside errors, with each entry tagged by severity. The CLI summary line, exit-code mapping, and stream-routing all key off severity in FORGE-6.5. Also add the first new rule that uses the warning/info plumbing: type-conformance, which catches the io.ts schema-check throws from FORGE-6.1 and surfaces them as validate errors (not raw exceptions).",
+      "design": "HOW:\n- In src/lib/tasks/types.ts:\n  - Extend ValidationError with required field `severity: \"error\" | \"warning\" | \"info\"` and add `\"type-conformance\"`, `\"empty-acceptance\"`, `\"orphan-label\"` to the type union (the latter two are placeholders for FORGE-6.3 and 6.4; declaring them now keeps the union closed and prevents drift).\n  - Extend ValidationResult: add required `warnings: ValidationError[]` and `info: ValidationError[]` arrays. Keep `errors: ValidationError[]` and `valid: boolean`. The `valid` flag remains `errors.length === 0` — warnings and info do NOT block validity.\n  - Existing callers reading `result.errors` and `result.valid` continue to work without change.\n\n- In src/lib/tasks/validate.ts, restructure the file-loading section. The current code at line 54-61 has a single discovery loop that reads ALL files (both target and non-target) without any try/catch. Replace that single loop with TWO explicit passes:\n\n  Pass 1 — target files (load-time errors surface as type-conformance and abort):\n    For each `filePath` in `targetFiles`, call `readTasksFile(filePath)` inside try/catch.\n      • On catch (the io.ts schema check from FORGE-6.1 throws on type mismatch):\n        - Push to `errors`: `{ type: \"type-conformance\", severity: \"error\", message: <caught error.message verbatim>, ids: [] }`.\n        - Return immediately: `{ valid: false, errors, warnings, info }`. Do NOT continue to other rules — a malformed target file is a hard stop.\n      • On success: contribute `data.tasks`/`data.epics` to `allTasks`/`allEpics`/`fileEpicsMap`/`fileTasksMap` as the current loop does (preserve the existing `if (!data) continue` for null returns from ENOENT — that's a TOCTOU race already-handled by current behavior).\n\n  Pass 2 — non-target files (load-time errors swallowed):\n    For each `filePath` in `allFiles` that is NOT already in `targetFiles`, call `readTasksFile(filePath)` inside try/catch.\n      • On catch: skip silently. Those files contribute only to cross-file dep resolution; if they're malformed, the user runs `forge tasks validate <that-feature>` to see the details.\n      • On success: contribute as in Pass 1.\n\n- Mechanical updates to existing code (semantically unchanged, but TypeScript-required because ValidationError gains required `severity` and ValidationResult gains required `warnings`/`info`). Nine sites in total:\n  - The two early-exit blocks at lines 28-30 (project-scope) and 36-38 (feature-scope) keep the same control flow, but:\n    • The `errors.push({ type: \"orphan-dep\", message, ids })` at lines 29 and 38 each gain `severity: \"error\"`.\n    • The `return { valid: false, errors }` at lines 30 and 39 each gain `, warnings: [], info: []`.\n  - The four existing rules (duplicate-id, orphan-dep cross-file, orphan-epic, cycle) keep the same control flow, but each `errors.push` site mechanically gains `severity: \"error\"` — sites at validate.ts:76 (duplicate-id), 85 (orphan-dep), 102 (orphan-epic), 138 (cycle).\n  - The final return at validate.ts:155 (currently `return { valid: errors.length === 0, errors };`) is mechanically updated to `return { valid: errors.length === 0, errors, warnings, info };` — adding the two new fields in literal-key order `{ valid, errors, warnings, info }`. JS object key insertion order is stable for non-integer string keys, so `JSON.stringify(result, null, 2)` emits keys in that fixed order — JSON shape is deterministic and FORGE-6.5's JSON-path tests can assert against it.\n  - Net effect: the four existing rules, the two early-exits, and the final return produce semantically identical user-visible output (same message text, same type, same exit code path). Only the TS shape gains the new `severity` field on entries and the new array fields on results. No tests asserting on `.message` or `.type` need updating; tests asserting on a full `ValidationError` object literal (none exist today — verified) would mechanically gain `severity: \"error\"`.\n\n- Backward compat: `handleValidate` at src/commands/tasks.ts:764 reads `result.errors` and `result.valid`; both continue to work. FORGE-6.5 will wire `warnings`/`info` into the CLI output.",
+      "acceptance": [
+        "ValidationError type carries 'severity: \"error\" | \"warning\" | \"info\"' field; the type union now includes 'type-conformance', 'empty-acceptance', and 'orphan-label' alongside the existing four.",
+        "ValidationResult shape now has 'errors', 'warnings', 'info' arrays. 'valid' remains true iff errors.length === 0 — warnings and info do NOT make valid false.",
+        "All four existing rules (duplicate-id, orphan-dep, orphan-epic, cycle) push to errors with severity 'error' — no behavior change for existing callers; messages and types unchanged.",
+        "A target tasks.json with a type mismatch (e.g. acceptance: 'a string') causes validateDag to surface a 'type-conformance' entry in result.errors, severity 'error', with the io.ts message verbatim (which already contains 'forge tasks update' per FORGE-6.1).",
+        "When readTasksFile throws on a target file, validateDag returns { valid: false, errors: [type-conformance entry], warnings: [], info: [] } early — does NOT continue and does NOT throw a raw exception.",
+        "When readTasksFile throws on a non-target file (during the all-files discovery loop), the error is caught and that file is skipped silently. Validation of the target file continues without that file's contribution to cross-file dep resolution.",
+        "Every existing validateDag test continues to pass without modification — the four existing error types, their messages, and their .errors-only tally remain unchanged.",
+        "Result shape always includes warnings: [] and info: [] arrays even when no entries exist (not undefined).",
+        "Co-located tests cover: type-mismatch in target file → error entry; type-mismatch in non-target file → silently skipped; result shape always has all three arrays; existing four rules untouched.",
+        "pnpm test passes; pnpm typecheck passes.",
+        "Backward-compat is mechanical: when ValidationError gains a required `severity: \"error\" | \"warning\" | \"info\"` field, every existing test in src/lib/__tests__/tasks.test.ts that asserts on a full ValidationError object literal (e.g. via `.toEqual({...})` or array-of-objects matching) is updated mechanically to include `severity: \"error\"`. Test assertions checking only `.message` or `.type` are not touched. This update is part of FORGE-6.2 scope, NOT a follow-up task.",
+        "Mechanical TypeScript updates required (no semantic behavior change): the two existing early-exit `errors.push` sites at lines 29 and 38 each gain `severity: \"error\"` on the literal; the two existing `return { valid: false, errors }` at lines 30 and 39 each gain `, warnings: [], info: []`; the four existing-rule `errors.push` sites at lines 76, 85, 102, 138 each gain `severity: \"error\"`. Verified by typecheck (the new ValidationError/ValidationResult required fields force every push and return site to be touched).",
+        "JSON-output shape is deterministic: validateDag returns `{ valid, errors, warnings, info }` with literal keys in that order, so `JSON.stringify(result)` emits the same key order every call. Test asserts the JSON output for `forge tasks validate --json` parses cleanly and contains all four top-level keys."
+      ],
+      "notes": "Files: src/lib/tasks/types.ts (extend ValidationError severity + ValidationResult arrays), src/lib/tasks/validate.ts (try/catch the readTasksFile calls; partition entries by severity), src/lib/__tests__/tasks.test.ts (extend). | Backward compat is critical — handleValidate reads result.errors and result.valid; both must continue to work unchanged. | This task lands the structured plumbing AND the first severity-error consumer of it; FORGE-6.3 and 6.4 land severity-warning and severity-info consumers respectively, and FORGE-6.5 wires the CLI output.",
+      "dependencies": [
+        "FORGE-6.1"
+      ],
+      "comments": [],
+      "closeReason": "Implemented; two-pass file loading + 9 mechanical updates + 6 new tests; review PASS."
+    },
+    {
+      "id": "FORGE-6.3",
+      "title": "validate.ts: empty acceptance[] warning rule (open tasks only)",
+      "status": "closed",
+      "priority": 2,
+      "labels": [
+        "complexity:2",
+        "phase:4"
+      ],
+      "description": "WHAT: Add a validate rule that surfaces a warning for every task where status === 'open' AND acceptance.length === 0. Exit code stays 0 (warnings don't fail validation per FORGE-6.5). Closed and in_progress tasks are NOT flagged: closed tasks have shipped (post-hoc empty-acceptance is too late to action), and in_progress tasks may be in the middle of an edit.",
+      "design": "HOW:\n- After the existing duplicate-id / orphan-dep / orphan-epic / cycle rules in validateDag, add a new pass over targetTasks (NOT allTasks — the rule scopes to the validation target, like the orphan-dep and orphan-epic rules already do).\n- For each task with task.status === 'open' && task.acceptance.length === 0, push to warnings with:\n  - severity: 'warning'\n  - type: 'empty-acceptance'\n  - message: `Task ${task.id} has no acceptance criteria`\n  - ids: [task.id]\n- Closed and in_progress tasks: skip silently (no entry).\n- Tasks with acceptance.length > 0: skip silently.\n- Note: this rule only sees well-typed task data (FORGE-6.1's load-time check has already errored on any task with acceptance: 'a string'), so '.length === 0' is safe — the field is guaranteed to be string[].",
+      "acceptance": [
+        "An open task with empty acceptance[] produces an entry in result.warnings with severity 'warning', type 'empty-acceptance', message containing the task ID.",
+        "A closed task with empty acceptance[] does NOT produce a warning (closed-task carve-out).",
+        "An in_progress task with empty acceptance[] does NOT produce a warning.",
+        "An open task with acceptance: ['x'] does NOT produce a warning (length > 0).",
+        "The warning entry sits in result.warnings, not result.errors. result.valid remains true (warnings don't block).",
+        "Co-located test fixture covers all four state combinations (open+empty, closed+empty, in_progress+empty, open+populated) in a single describe block.",
+        "pnpm test passes; pnpm typecheck passes."
+      ],
+      "notes": "Files: src/lib/tasks/validate.ts (add rule), src/lib/__tests__/tasks.test.ts (extend). Independent from FORGE-6.4 — they don't interact and could land in either order. Both depend only on FORGE-6.2's structured-result plumbing.",
+      "dependencies": [
+        "FORGE-6.2"
+      ],
+      "comments": [],
+      "closeReason": "Implemented in worktree-agent commit; cherry-picked clean to feature branch; +6 tests; agent self-reported PASS."
+    },
+    {
+      "id": "FORGE-6.4",
+      "title": "validate.ts: orphan-label info rule (bare labels only, ':'-prefix carve-out)",
+      "status": "closed",
+      "priority": 2,
+      "labels": [
+        "complexity:4",
+        "phase:4"
+      ],
+      "description": "WHAT: Add a passive info rule that surfaces bare labels appearing on exactly one task in a sibling group. Bare = no ':' in the label. Sibling = same immediate parent (derived from ID prefix: 'FORGE-5.2.1' → parent 'FORGE-5.2'; 'FORGE-5.3' → parent 'FORGE-5'). Labels containing ':' (e.g. 'phase:5', 'gate:human', 'complexity:4') are exempt — they're prefix-namespaced metadata, not topical tags. Output is 'info:' severity; FORGE-6.5 prints these to stderr and does NOT count them toward the M warnings tally.",
+      "design": "HOW:\n- After FORGE-6.3's empty-acceptance pass in validateDag, add a new pass over targetTasks (scoped to target, not allTasks).\n- Group tasks by parent ID. Parse parent from task.id by removing the last '.N' segment:\n  - 'FORGE-5.2.1' → 'FORGE-5.2'\n  - 'FORGE-5.3' → 'FORGE-5'\n  - 'FORGE-5' → no parent (this is an epic-shaped ID, depth 1)\n- Use idDepth from src/lib/tasks/io.ts:202 to bail for tasks at depth ≤ 1 — siblings only meaningful at depth ≥ 2.\n- For each parent group, iterate its tasks. For each task's labels, filter to BARE labels (label.includes(':') === false). Count occurrences of each bare label across the group.\n- If a bare label appears on exactly ONE task in the group, emit an info entry:\n  - severity: 'info'\n  - type: 'orphan-label'\n  - message: `Label '${label}' on task ${task.id} appears on only one task in the ${parentId} sibling group`\n  - ids: [task.id]\n- Labels with ':' (phase:5, gate:human, complexity:4, future prefix conventions) are pre-filtered before the count — never analyzed, never appear in info.\n- Per-parent-group, NOT global. A bare label can be 'orphan' inside one group while shared across the rest of the project — that's expected (different groups have different topical concerns).",
+      "acceptance": [
+        "Three sibling tasks where exactly one carries label 'frontend' (bare) → an info entry surfaces for that task; the other two are not flagged.",
+        "Three sibling tasks where exactly one carries label 'phase:5' → NO info entry (':'-carve-out).",
+        "Three sibling tasks where exactly one carries label 'gate:human' → NO info entry (':'-carve-out).",
+        "Three sibling tasks where exactly one carries label 'complexity:4' → NO info entry (':'-carve-out).",
+        "Three sibling tasks where two of three share label 'frontend' → NO info entry (count > 1).",
+        "Tasks at depth ≤ 1 (e.g. an epic-shaped ID like 'FORGE-6') are skipped — no info entries emitted for top-level items.",
+        "A bare label that's orphan inside one parent group but shared across multiple groups → info fires per-group only where it's orphan; other groups produce no entry for that label.",
+        "Result entries land in result.info, severity 'info'. result.warnings is unaffected; result.valid is unaffected (info is not a warning and not an error).",
+        "pnpm test passes; pnpm typecheck passes."
+      ],
+      "notes": "Files: src/lib/tasks/validate.ts (add rule, import idDepth from io.ts), src/lib/__tests__/tasks.test.ts (extend). Carve-outs are tested explicitly because the bare-label distinction is the load-bearing rationale for info-not-warning. | Independent from FORGE-6.3 — they don't interact.",
+      "dependencies": [
+        "FORGE-6.2"
+      ],
+      "comments": [],
+      "closeReason": "Implemented in worktree-agent commit; cherry-picked with merge resolution (rule 6 sequenced after rule 5); +10 tests including FORGE-6.5 regex contract assertion; agent PASS."
+    },
+    {
+      "id": "FORGE-6.5",
+      "title": "tasks.ts: validate summary line + severity-to-stream + exit-code mapping",
+      "status": "closed",
+      "priority": 2,
+      "labels": [
+        "complexity:3",
+        "phase:4"
+      ],
+      "description": "WHAT: Wire the structured ValidationResult into handleValidate so the CLI prints (a) errors to stderr (existing pattern preserved), (b) warnings to stderr with 'warning:' prefix, (c) info to stderr with 'info:' prefix, and (d) a summary line 'validate: N errors, M warnings' to stdout as the LAST line. Info entries do NOT count toward the M warnings tally. Exit code is 1 iff result.errors.length > 0; warnings and info never block (exit 0). The summary line is greppable for scripts.",
+      "design": "HOW:\n- In src/commands/tasks.ts, refactor handleValidate (lines 764-784):\n  - JSON path (line 772-773): the existing JSON.stringify(result, null, 2) auto-includes the new \"warnings\" and \"info\" arrays once FORGE-6.2's ValidationResult shape lands. No code change needed there beyond confirming the test assertion sees all three arrays.\n  - Non-JSON path — LOCKED line formats (no two engineers should disagree on output shape):\n    1. Errors (preserve existing pattern). If result.errors.length > 0:\n       - Print header to stderr: `DAG validation found N error(s):`\n       - Then one line per entry to stderr: `  [<type>] <message>` (two-space indent, square-bracketed type, then message). Existing format unchanged.\n    2. Warnings. If result.warnings.length > 0, print one line per entry to stderr in the EXACT format:\n       - `warning: [<type>] <message>` (no indent; severity prefix `warning:`, single space, bracketed type, single space, message).\n    3. Info. If result.info.length > 0, print one line per entry to stderr in the EXACT format:\n       - `info: [<type>] <message>` (no indent; severity prefix `info:`, single space, bracketed type, single space, message).\n    4. ALWAYS print the summary line to stdout as the LAST emission: `validate: ${result.errors.length} errors, ${result.warnings.length} warnings`. Replace the existing \"DAG is valid. No errors found.\" message with this summary line so both clean and dirty paths converge on the same final stdout.\n  - Plurality is LOCKED: the strings \"errors\" and \"warnings\" in the summary line are ALWAYS plural — never \"1 error\" or \"1 warning\". This is intentional for grep stability (e.g. `grep -E '^validate: [0-9]+ errors' output.txt`). Document this in a code comment so a future contributor doesn't \"fix\" it.\n  - Exit code: process.exit(result.errors.length > 0 ? 1 : 0). Warnings and info do NOT contribute to the exit code.\n- Severity-to-stream rule:\n  - errors → stderr (existing)\n  - warnings → stderr (script doing `forge tasks validate | grep warning` against stdout returns 0; intentional — grep stderr if you want them)\n  - info → stderr (per plan: \"info lines print to stderr but are not tallied\")\n  - summary line → stdout (greppable; scripts that need a yes/no can grep `^validate: 0 errors`)\n\nConcrete output examples (locking the contract):\n  error line:    `  [duplicate-id] Duplicate ID: FORGE-6.2`\n  warning line:  `warning: [empty-acceptance] Task FORGE-6.7 has no acceptance criteria`\n  info line:     `info: [orphan-label] Label 'frontend' on task FORGE-6.5.1 appears on only one task in the FORGE-6.5 sibling group`\n  summary line:  `validate: 1 errors, 2 warnings`\n\nCross-task contract: the warning/info messages above match the message text produced by FORGE-6.3 (empty-acceptance) and FORGE-6.4 (orphan-label). Bracketed types match each rule's `type:` field. Any drift across these tasks is a contract violation.\n\nTest pattern (follow the adjacent style at src/commands/__tests__/tasks.test.ts:425-456): use the existing `setupFeature(tmp, <feature>, tasksData)` helper to write a complete TasksFile, then call `await tasks([\"validate\", <feature>])` (or `[\"validate\", <feature>, \"--json\"]`) inside a try/catch. Spies `exitSpy`, `errorSpy`, `logSpy` are already configured in the surrounding describe block via `spyOn(...).mockImplementation(...)`. Assert against `exitSpy.mock.calls` for exit codes, `errorSpy.mock.calls.map(c => c[0]).join(\"\\n\")` for stderr capture (regex-match the warning/info line formats above), and `logSpy.mock.calls.map(c => c[0]).join(\"\\n\")` for stdout (last non-empty line is the summary). No new test infrastructure is required.",
+      "acceptance": [
+        "On a clean fixture (zero entries), summary `validate: 0 errors, 0 warnings` prints to stdout, exit 0; nothing on stderr.",
+        "On a fixture with one error (e.g. duplicate-id), summary `validate: 1 errors, 0 warnings` prints to stdout, exit 1, error text on stderr in the locked format `  [<type>] <message>` (two-space indent, bracketed type).",
+        "On a fixture with zero errors and one warning (empty-acceptance on an open task), summary `validate: 0 errors, 1 warnings` prints to stdout, exit 0, warning text on stderr matches the regex `^warning: \\[empty-acceptance\\] Task FORGE-\\S+ has no acceptance criteria$`.",
+        "On a fixture with one info entry (orphan-label) and zero errors/warnings, summary `validate: 0 errors, 0 warnings` prints to stdout — info NOT tallied — exit 0, info text on stderr matches the regex `^info: \\[orphan-label\\] Label '.+' on task FORGE-\\S+ appears on only one task in the FORGE-\\S+ sibling group$`.",
+        "Combined fixture: 1 error + 2 warnings + 3 info → summary `validate: 1 errors, 2 warnings` prints last on stdout, exit 1; all 6 entries print on stderr in order errors → warnings → info.",
+        "Plurality is LOCKED: `validate: 1 errors, 1 warnings` (NEVER `1 error` / `1 warning`). Test asserts the literal substrings `errors,` and `warnings` to catch any future \"pluralize-correct\" regression.",
+        "Summary line is the LAST stdout emission — verified by capturing stdout and asserting the final non-empty line matches the regex `^validate: \\d+ errors, \\d+ warnings$`.",
+        "JSON output (`forge tasks validate --json`) emits a result object with errors, warnings, info as separate arrays; tests assert all three keys present even when empty.",
+        "Co-located tests in src/commands/__tests__/tasks.test.ts cover each scenario above with stdout/stderr capture.",
+        "pnpm test passes; pnpm typecheck passes."
+      ],
+      "notes": "Files: src/commands/tasks.ts (modify handleValidate at lines 764-784), src/commands/__tests__/tasks.test.ts (extend). Final task in Phase 4 — depends on 6.2 (structured result), 6.3 (warnings), 6.4 (info) all landing first. | The plan acceptance criterion `Summary line \"validate: N errors, M warnings\" prints last on stdout` is locked here.",
+      "dependencies": [
+        "FORGE-6.2",
+        "FORGE-6.3",
+        "FORGE-6.4"
+      ],
+      "comments": [],
+      "closeReason": "Implemented; 8 new tests covering the 4 locked output contracts; review PASS."
     }
   ]
 }

@@ -6,7 +6,9 @@ import { join } from "path";
 import { resolveRepoRoot } from "../worktree";
 import type { Epic, Task, ValidationError, ValidationResult, ValidateScope } from "./types";
 import { TASKS_FILENAME } from "./types";
-import { discoverTaskFilesFromRoot, readTasksFile } from "./io";
+import { discoverTaskFilesFromRoot, idParent, readTasksFile } from "./io";
+
+const isNamespacedLabel = (label: string): boolean => label.includes(":");
 
 /**
  * Validate the task DAG for a feature, project-level tasks, or everything.
@@ -18,6 +20,8 @@ export function validateDag(scope: ValidateScope, cwd?: string): ValidationResul
   const root = resolveRepoRoot(cwd);
   const allFiles = discoverTaskFilesFromRoot(root);
   const errors: ValidationError[] = [];
+  const warnings: ValidationError[] = [];
+  const info: ValidationError[] = [];
 
   // Determine which files to validate vs which are context-only
   let targetFiles: string[];
@@ -27,7 +31,7 @@ export function validateDag(scope: ValidateScope, cwd?: string): ValidationResul
       targetFiles = allFiles.filter((f) => f === projectPath);
       if (targetFiles.length === 0) {
         errors.push({ type: "orphan-dep", message: "No project-level tasks.json found at plans/tasks.json", ids: [] });
-        return { valid: false, errors };
+        return { valid: false, errors, warnings, info };
       }
       break;
     }
@@ -36,7 +40,7 @@ export function validateDag(scope: ValidateScope, cwd?: string): ValidationResul
       targetFiles = allFiles.filter((f) => f === featurePath);
       if (targetFiles.length === 0) {
         errors.push({ type: "orphan-dep", message: `No tasks.json found for feature "${scope.name}"`, ids: [] });
-        return { valid: false, errors };
+        return { valid: false, errors, warnings, info };
       }
       break;
     }
@@ -45,19 +49,50 @@ export function validateDag(scope: ValidateScope, cwd?: string): ValidationResul
       break;
   }
 
-  // Load all files for cross-file resolution
+  // Load files for cross-file resolution. Two passes:
+  //   Pass 1 — target files: load errors surface as type-conformance + abort.
+  //   Pass 2 — non-target files: load errors swallowed (those files are
+  //            context-only; if malformed, the user runs validate against them).
   const allTasks: Task[] = [];
   const allEpics: Epic[] = [];
   const fileEpicsMap = new Map<string, Set<string>>();
   const fileTasksMap = new Map<string, Task[]>();
+  const targetSet = new Set(targetFiles);
 
-  for (const filePath of allFiles) {
-    const data = readTasksFile(filePath);
+  // Pass 1: target files
+  for (const filePath of targetFiles) {
+    let data;
+    try {
+      data = readTasksFile(filePath);
+    } catch (caught) {
+      errors.push({
+        type: "type-conformance",
+        message: caught instanceof Error ? caught.message : String(caught),
+        ids: [],
+      });
+      return { valid: false, errors, warnings, info };
+    }
     if (!data) continue;
     allTasks.push(...data.tasks);
     allEpics.push(...data.epics);
     fileEpicsMap.set(filePath, new Set(data.epics.map((e) => e.id)));
     fileTasksMap.set(filePath, data.tasks);
+  }
+
+  // Pass 2: non-target files (silent on error). Their tasks/epics flow into
+  // allTasks/allEpics for cross-file dep + duplicate-id resolution; the
+  // per-file maps are only consulted for target files (orphan-epic rule).
+  for (const filePath of allFiles) {
+    if (targetSet.has(filePath)) continue;
+    let data;
+    try {
+      data = readTasksFile(filePath);
+    } catch {
+      continue;
+    }
+    if (!data) continue;
+    allTasks.push(...data.tasks);
+    allEpics.push(...data.epics);
   }
 
   const taskIdSet = new Set(allTasks.map((t) => t.id));
@@ -152,5 +187,53 @@ export function validateDag(scope: ValidateScope, cwd?: string): ValidationResul
     }
   }
 
-  return { valid: errors.length === 0, errors };
+  // 5. Empty acceptance: open tasks only — closed has shipped, in_progress
+  // may be mid-edit.
+  for (const task of targetTasks) {
+    if (task.status === "open" && task.acceptance.length === 0) {
+      warnings.push({
+        type: "empty-acceptance",
+        message: `Task ${task.id} has no acceptance criteria`,
+        ids: [task.id],
+      });
+    }
+  }
+
+  // 6. Orphan-label: bare labels appearing on exactly one task in a sibling
+  // group. Namespaced labels (phase:N, gate:human, complexity:N, future
+  // <ns>:value) are exempt — those are metadata, not topical tags.
+  const groupMap = new Map<string, Task[]>();
+  for (const task of targetTasks) {
+    const parentId = idParent(task.id);
+    if (parentId === null) continue;
+    const group = groupMap.get(parentId);
+    if (group) {
+      group.push(task);
+    } else {
+      groupMap.set(parentId, [task]);
+    }
+  }
+  for (const [parentId, groupTasks] of groupMap) {
+    const labelCounts = new Map<string, number>();
+    for (const task of groupTasks) {
+      for (const label of task.labels) {
+        if (isNamespacedLabel(label)) continue;
+        labelCounts.set(label, (labelCounts.get(label) ?? 0) + 1);
+      }
+    }
+    for (const task of groupTasks) {
+      for (const label of task.labels) {
+        if (isNamespacedLabel(label)) continue;
+        if (labelCounts.get(label) === 1) {
+          info.push({
+            type: "orphan-label",
+            message: `Label '${label}' on task ${task.id} appears on only one task in the ${parentId} sibling group`,
+            ids: [task.id],
+          });
+        }
+      }
+    }
+  }
+
+  return { valid: errors.length === 0, errors, warnings, info };
 }

@@ -455,6 +455,137 @@ describe("forge tasks CLI", () => {
     expect(parsed.errors.length).toBeGreaterThan(0);
   });
 
+  // ── handleValidate: summary + severity-to-stream + exit ──
+
+  function joinLog(spy: ReturnType<typeof spyOn>): string {
+    return spy.mock.calls.map((c: any[]) => String(c[0])).join("\n");
+  }
+
+  it("validate: clean fixture → 'validate: 0 errors, 0 warnings' on stdout, exit 0", async () => {
+    setupFeature(tmp, "auth", {
+      version: 1,
+      epics: [{ id: "TEST-1", title: "P1", created: "2026-03-30" }],
+      tasks: [{ id: "TEST-1.1", title: "A", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: ["a"], notes: "", dependencies: [], comments: [], closeReason: null }],
+    });
+    try { await tasks(["validate", "auth"]); } catch {}
+    expect(exitSpy).not.toHaveBeenCalledWith(1);
+    expect(joinLog(logSpy)).toContain("validate: 0 errors, 0 warnings");
+  });
+
+  it("validate: 1 error → summary 'validate: 1 errors, 0 warnings' on stdout, exit 1, error on stderr in [type] msg format", async () => {
+    setupFeature(tmp, "auth", {
+      version: 1,
+      epics: [{ id: "TEST-1", title: "P1", created: "2026-03-30" }],
+      tasks: [
+        { id: "TEST-1.1", title: "A", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: ["a"], notes: "", dependencies: ["TEST-1.2"], comments: [], closeReason: null },
+        { id: "TEST-1.2", title: "B", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: ["b"], notes: "", dependencies: ["TEST-1.1"], comments: [], closeReason: null },
+      ],
+    });
+    try { await tasks(["validate", "auth"]); } catch {}
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    expect(joinLog(logSpy)).toContain("validate: 1 errors, 0 warnings");
+    expect(joinLog(errorSpy)).toMatch(/\[cycle\]/);
+  });
+
+  it("validate: 1 warning (empty-acceptance) → summary 'validate: 0 errors, 1 warnings', exit 0, 'warning: [empty-acceptance]…' on stderr", async () => {
+    setupFeature(tmp, "auth", {
+      version: 1,
+      epics: [{ id: "TEST-1", title: "P1", created: "2026-03-30" }],
+      tasks: [{ id: "TEST-1.1", title: "Open empty", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: null }],
+    });
+    try { await tasks(["validate", "auth"]); } catch {}
+    expect(exitSpy).not.toHaveBeenCalledWith(1);
+    expect(joinLog(logSpy)).toContain("validate: 0 errors, 1 warnings");
+    expect(joinLog(errorSpy)).toMatch(/^warning: \[empty-acceptance\] Task TEST-\S+ has no acceptance criteria$/m);
+  });
+
+  it("validate: 1 info (orphan-label) → summary 'validate: 0 errors, 0 warnings' (info NOT tallied), exit 0, 'info: [orphan-label]…' on stderr", async () => {
+    setupFeature(tmp, "auth", {
+      version: 1,
+      epics: [{ id: "TEST-1", title: "P1", created: "2026-03-30" }],
+      tasks: [
+        { id: "TEST-1.1", title: "A", status: "open", priority: 2, labels: ["frontend"], description: "", design: "", acceptance: ["a"], notes: "", dependencies: [], comments: [], closeReason: null },
+        { id: "TEST-1.2", title: "B", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: ["b"], notes: "", dependencies: [], comments: [], closeReason: null },
+        { id: "TEST-1.3", title: "C", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: ["c"], notes: "", dependencies: [], comments: [], closeReason: null },
+      ],
+    });
+    try { await tasks(["validate", "auth"]); } catch {}
+    expect(exitSpy).not.toHaveBeenCalledWith(1);
+    expect(joinLog(logSpy)).toContain("validate: 0 errors, 0 warnings"); // info NOT tallied
+    expect(joinLog(errorSpy)).toMatch(/^info: \[orphan-label\] Label '.+' on task TEST-\S+ appears on only one task in the TEST-\S+ sibling group$/m);
+  });
+
+  it("validate: combined 1 error + 2 warnings + 3 info → summary 'validate: 1 errors, 2 warnings', exit 1, all entries on stderr", async () => {
+    setupFeature(tmp, "auth");
+    const data: TasksFile = {
+      version: 1,
+      epics: [
+        { id: "TEST-1", title: "P1", created: "2026-03-30" },
+        { id: "TEST-2", title: "P2", created: "2026-03-30" },
+      ],
+      tasks: [
+        // Cycle = 1 error; both tasks open+empty = 2 warnings. No bare labels here.
+        { id: "TEST-1.1", title: "A", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: ["TEST-1.2"], comments: [], closeReason: null },
+        { id: "TEST-1.2", title: "B", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: ["TEST-1.1"], comments: [], closeReason: null },
+        // Three sibling tasks with distinct bare labels = 3 orphan-label info.
+        { id: "TEST-2.1", title: "X", status: "open", priority: 2, labels: ["alpha"], description: "", design: "", acceptance: ["x"], notes: "", dependencies: [], comments: [], closeReason: null },
+        { id: "TEST-2.2", title: "Y", status: "open", priority: 2, labels: ["beta"], description: "", design: "", acceptance: ["y"], notes: "", dependencies: [], comments: [], closeReason: null },
+        { id: "TEST-2.3", title: "Z", status: "open", priority: 2, labels: ["gamma"], description: "", design: "", acceptance: ["z"], notes: "", dependencies: [], comments: [], closeReason: null },
+      ],
+    };
+    writeFileSync(join(tmp, "plans", "auth", TASKS_FILENAME), JSON.stringify(data, null, 2) + "\n");
+    try { await tasks(["validate", "auth"]); } catch {}
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    expect(joinLog(logSpy)).toContain("validate: 1 errors, 2 warnings");
+    const stderr = joinLog(errorSpy);
+    expect(stderr).toMatch(/\[cycle\]/);
+    expect(stderr.match(/^warning: \[empty-acceptance\]/gm)?.length).toBe(2);
+    expect(stderr.match(/^info: \[orphan-label\]/gm)?.length).toBe(3);
+  });
+
+  it("validate: plurality LOCKED — '1 errors,' (with comma) and 'warnings' substrings present even when count is 1", async () => {
+    setupFeature(tmp, "auth", {
+      version: 1,
+      epics: [{ id: "TEST-1", title: "P1", created: "2026-03-30" }],
+      tasks: [{ id: "TEST-1.1", title: "Open empty", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: null }],
+    });
+    try { await tasks(["validate", "auth"]); } catch {}
+    const summary = joinLog(logSpy);
+    expect(summary).toContain("errors,"); // never "error,"
+    expect(summary).toContain("warnings"); // never "warning"
+    expect(summary).not.toMatch(/\b1 error\b/);
+    expect(summary).not.toMatch(/\b1 warning\b/);
+  });
+
+  it("validate: summary is the LAST non-empty stdout line", async () => {
+    setupFeature(tmp, "auth", {
+      version: 1,
+      epics: [{ id: "TEST-1", title: "P1", created: "2026-03-30" }],
+      tasks: [],
+    });
+    try { await tasks(["validate", "auth"]); } catch {}
+    const allStdout = logSpy.mock.calls.map((c: any[]) => String(c[0])).filter((l: string) => l.trim().length > 0);
+    const last = allStdout[allStdout.length - 1];
+    expect(last).toMatch(/^validate: \d+ errors, \d+ warnings$/);
+  });
+
+  it("validate --json: result object includes errors, warnings, info as separate arrays", async () => {
+    setupFeature(tmp, "auth", {
+      version: 1,
+      epics: [{ id: "TEST-1", title: "P1", created: "2026-03-30" }],
+      tasks: [],
+    });
+    try { await tasks(["validate", "auth", "--json"]); } catch {}
+    const output = logSpy.mock.calls[0][0];
+    const parsed = JSON.parse(output);
+    expect("errors" in parsed).toBe(true);
+    expect("warnings" in parsed).toBe(true);
+    expect("info" in parsed).toBe(true);
+    expect(Array.isArray(parsed.errors)).toBe(true);
+    expect(Array.isArray(parsed.warnings)).toBe(true);
+    expect(Array.isArray(parsed.info)).toBe(true);
+  });
+
   // ── handleComment CLI wiring (#3-adjacent) ────────────────────
 
   it("comment adds message to task", async () => {

@@ -6,7 +6,22 @@ import { existsSync, readdirSync, readFileSync, writeFileSync } from "fs";
 import { join } from "path";
 import { resolveRepoRoot } from "../worktree";
 import type { Comment, Epic, Task, TasksFile } from "./types";
-import { SCHEMA_VERSION, TASKS_FILENAME } from "./types";
+import { RECOVERY_HINT, SCHEMA_VERSION, TASKS_FILENAME } from "./types";
+
+function isStringArray(v: unknown): v is string[] {
+  return Array.isArray(v) && v.every((x) => typeof x === "string");
+}
+
+function isCommentArray(v: unknown): boolean {
+  return (
+    Array.isArray(v) &&
+    v.every((x) => {
+      if (typeof x !== "object" || x === null) return false;
+      const r = x as Record<string, unknown>;
+      return typeof r.message === "string" && typeof r.timestamp === "string";
+    })
+  );
+}
 
 // ─── Path Resolution ────────────────────────────────────────────────
 
@@ -102,7 +117,7 @@ export function readTasksFile(filePath: string): TasksFile | null {
     data = JSON.parse(raw);
   } catch (cause) {
     throw new Error(
-      `Failed to parse ${filePath}: ${cause instanceof Error ? cause.message : String(cause)}`
+      `Failed to parse ${filePath}: ${cause instanceof Error ? cause.message : String(cause)}. ${RECOVERY_HINT}`
     );
   }
 
@@ -113,7 +128,7 @@ export function readTasksFile(filePath: string): TasksFile | null {
     !Array.isArray((data as Record<string, unknown>).tasks)
   ) {
     throw new Error(
-      `Invalid tasks.json schema in ${filePath}: expected object with "epics" and "tasks" arrays`
+      `Invalid tasks.json schema in ${filePath}: expected object with "epics" and "tasks" arrays. ${RECOVERY_HINT}`
     );
   }
 
@@ -122,7 +137,7 @@ export function readTasksFile(filePath: string): TasksFile | null {
   const version = record.version;
   if (typeof version === "number" && version > SCHEMA_VERSION) {
     throw new Error(
-      `${filePath} has schema version ${version}, but this version of forge only supports up to version ${SCHEMA_VERSION}. Please upgrade forge.`
+      `${filePath} has schema version ${version}, but this version of forge only supports up to version ${SCHEMA_VERSION}. Please upgrade forge. ${RECOVERY_HINT}`
     );
   }
 
@@ -133,7 +148,7 @@ export function readTasksFile(filePath: string): TasksFile | null {
     const e = epics[i];
     if (typeof e !== "object" || e === null || typeof (e as Record<string, unknown>).id !== "string") {
       throw new Error(
-        `Invalid epic at index ${i} in ${filePath}: each epic must be an object with a string "id"`
+        `Invalid epic at index ${i} in ${filePath}: each epic must be an object with a string "id". ${RECOVERY_HINT}`
       );
     }
   }
@@ -141,16 +156,35 @@ export function readTasksFile(filePath: string): TasksFile | null {
   for (let i = 0; i < tasks.length; i++) {
     const t = tasks[i];
     if (typeof t !== "object" || t === null) {
-      throw new Error(`Invalid task at index ${i} in ${filePath}: must be an object`);
+      throw new Error(`Invalid task at index ${i} in ${filePath}: must be an object. ${RECOVERY_HINT}`);
     }
     const tr = t as Record<string, unknown>;
     if (typeof tr.id !== "string") {
-      throw new Error(`Invalid task at index ${i} in ${filePath}: missing or non-string "id"`);
+      throw new Error(`Invalid task at index ${i} in ${filePath}: missing or non-string "id". ${RECOVERY_HINT}`);
     }
     if (typeof tr.status !== "string" || !["open", "in_progress", "closed"].includes(tr.status)) {
       throw new Error(
-        `Invalid task "${tr.id ?? i}" in ${filePath}: status must be "open", "in_progress", or "closed"`
+        `Invalid task "${tr.id ?? i}" in ${filePath}: status must be "open", "in_progress", or "closed". ${RECOVERY_HINT}`
       );
+    }
+
+    const taskId = tr.id;
+    const fieldError = (name: string, expected: string): string =>
+      `Invalid task "${taskId}" in ${filePath}: field ${name} must be ${expected}. ${RECOVERY_HINT}`;
+
+    if (typeof tr.title !== "string") throw new Error(fieldError("title", "string"));
+    if (typeof tr.priority !== "number") throw new Error(fieldError("priority", "number"));
+    if (!isStringArray(tr.labels)) throw new Error(fieldError("labels", "string[]"));
+    if (typeof tr.description !== "string") throw new Error(fieldError("description", "string"));
+    if (typeof tr.design !== "string") throw new Error(fieldError("design", "string"));
+    if (!isStringArray(tr.acceptance)) throw new Error(fieldError("acceptance", "string[]"));
+    if (typeof tr.notes !== "string") throw new Error(fieldError("notes", "string"));
+    if (!isStringArray(tr.dependencies)) throw new Error(fieldError("dependencies", "string[]"));
+    if (!isCommentArray(tr.comments)) {
+      throw new Error(fieldError("comments", "Comment[] (each { message: string, timestamp: string })"));
+    }
+    if (tr.closeReason !== null && typeof tr.closeReason !== "string") {
+      throw new Error(fieldError("closeReason", "string | null"));
     }
   }
 
@@ -203,6 +237,13 @@ export function idDepth(id: string): number {
   const dashIdx = id.indexOf("-");
   if (dashIdx === -1) return 0;
   return id.substring(dashIdx + 1).split(".").length;
+}
+
+export function idParent(id: string): string | null {
+  if (idDepth(id) <= 1) return null;
+  const lastDot = id.lastIndexOf(".");
+  if (lastDot === -1) return null;
+  return id.substring(0, lastDot);
 }
 
 // ─── Task Lookup ────────────────────────────────────────────────────
