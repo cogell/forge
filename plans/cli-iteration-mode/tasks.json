@@ -588,7 +588,7 @@
     {
       "id": "FORGE-6.5",
       "title": "tasks.ts: validate summary line + severity-to-stream + exit-code mapping",
-      "status": "in_progress",
+      "status": "closed",
       "priority": 2,
       "labels": [
         "complexity:3",
@@ -615,7 +615,7 @@
         "FORGE-6.4"
       ],
       "comments": [],
-      "closeReason": null
+      "closeReason": "Implemented; 8 new tests covering the 4 locked output contracts; review PASS."
     }
   ]
 }
