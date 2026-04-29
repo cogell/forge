@@ -1938,6 +1938,8 @@ describe("validateDag — structured result (FORGE-6.2)", () => {
   });
 });
 
+// ─── validateDag — empty-acceptance warning (FORGE-6.3) ─────────────
+
 describe("validateDag — empty-acceptance warning (FORGE-6.3)", () => {
   let tmpDir: string;
   beforeEach(() => { tmpDir = makeTmpDir(); setupProject(tmpDir, "FORGE"); });
@@ -2002,6 +2004,175 @@ describe("validateDag — empty-acceptance warning (FORGE-6.3)", () => {
     expect(emptyAccept).toHaveLength(1);
     expect(emptyAccept[0].ids).toEqual(["FORGE-1.1"]);
     expect(result.valid).toBe(true);
+  });
+});
+
+// ─── validateDag — orphan-label info (FORGE-6.4) ─────────────────────
+
+describe("validateDag — orphan-label info (FORGE-6.4)", () => {
+  let tmpDir: string;
+  beforeEach(() => { tmpDir = makeTmpDir(); setupProject(tmpDir, "FORGE"); });
+  afterEach(() => { rmSync(tmpDir, { recursive: true, force: true }); });
+
+  function makeTask(id: string, labels: string[]): Task {
+    return {
+      id,
+      title: `t-${id}`,
+      status: "open",
+      priority: 2,
+      labels,
+      description: "",
+      design: "",
+      acceptance: ["a"],
+      notes: "",
+      dependencies: [],
+      comments: [],
+      closeReason: null,
+    };
+  }
+
+  it("emits info entry for a bare label appearing on exactly one task in a sibling group", () => {
+    const tasks: Task[] = [
+      makeTask("FORGE-1.1", ["frontend"]),
+      makeTask("FORGE-1.2", []),
+      makeTask("FORGE-1.3", []),
+    ];
+    setupFeature(tmpDir, "auth", { version: 1, epics: [{ id: "FORGE-1", title: "Auth", created: "2026-03-30" }], tasks });
+    const result = validateDag({ kind: "feature", name: "auth" }, tmpDir);
+    const orphans = result.info.filter((e) => e.type === "orphan-label");
+    expect(orphans).toHaveLength(1);
+    expect(orphans[0].severity).toBe("info");
+    expect(orphans[0].ids).toEqual(["FORGE-1.1"]);
+    expect(orphans[0].message).toBe("Label 'frontend' on task FORGE-1.1 appears on only one task in the FORGE-1 sibling group");
+    // matches FORGE-6.5's locked regex
+    expect(orphans[0].message).toMatch(/^Label '.+' on task FORGE-\S+ appears on only one task in the FORGE-\S+ sibling group$/);
+  });
+
+  it("does NOT flag the other tasks in the group (only the orphan-bearing one)", () => {
+    const tasks: Task[] = [
+      makeTask("FORGE-1.1", ["frontend"]),
+      makeTask("FORGE-1.2", []),
+      makeTask("FORGE-1.3", []),
+    ];
+    setupFeature(tmpDir, "auth", { version: 1, epics: [{ id: "FORGE-1", title: "Auth", created: "2026-03-30" }], tasks });
+    const result = validateDag({ kind: "feature", name: "auth" }, tmpDir);
+    const orphanIds = result.info.filter((e) => e.type === "orphan-label").flatMap((e) => e.ids);
+    expect(orphanIds).not.toContain("FORGE-1.2");
+    expect(orphanIds).not.toContain("FORGE-1.3");
+  });
+
+  it("':'-carve-out: label 'phase:5' on exactly one task → no info entry", () => {
+    const tasks: Task[] = [
+      makeTask("FORGE-1.1", ["phase:5"]),
+      makeTask("FORGE-1.2", []),
+      makeTask("FORGE-1.3", []),
+    ];
+    setupFeature(tmpDir, "auth", { version: 1, epics: [{ id: "FORGE-1", title: "Auth", created: "2026-03-30" }], tasks });
+    const result = validateDag({ kind: "feature", name: "auth" }, tmpDir);
+    expect(result.info.filter((e) => e.type === "orphan-label")).toHaveLength(0);
+  });
+
+  it("':'-carve-out: label 'gate:human' on exactly one task → no info entry", () => {
+    const tasks: Task[] = [
+      makeTask("FORGE-1.1", ["gate:human"]),
+      makeTask("FORGE-1.2", []),
+      makeTask("FORGE-1.3", []),
+    ];
+    setupFeature(tmpDir, "auth", { version: 1, epics: [{ id: "FORGE-1", title: "Auth", created: "2026-03-30" }], tasks });
+    const result = validateDag({ kind: "feature", name: "auth" }, tmpDir);
+    expect(result.info.filter((e) => e.type === "orphan-label")).toHaveLength(0);
+  });
+
+  it("':'-carve-out: label 'complexity:4' on exactly one task → no info entry", () => {
+    const tasks: Task[] = [
+      makeTask("FORGE-1.1", ["complexity:4"]),
+      makeTask("FORGE-1.2", []),
+      makeTask("FORGE-1.3", []),
+    ];
+    setupFeature(tmpDir, "auth", { version: 1, epics: [{ id: "FORGE-1", title: "Auth", created: "2026-03-30" }], tasks });
+    const result = validateDag({ kind: "feature", name: "auth" }, tmpDir);
+    expect(result.info.filter((e) => e.type === "orphan-label")).toHaveLength(0);
+  });
+
+  it("count > 1: bare label shared by 2 of 3 siblings → no info entry", () => {
+    const tasks: Task[] = [
+      makeTask("FORGE-1.1", ["frontend"]),
+      makeTask("FORGE-1.2", ["frontend"]),
+      makeTask("FORGE-1.3", []),
+    ];
+    setupFeature(tmpDir, "auth", { version: 1, epics: [{ id: "FORGE-1", title: "Auth", created: "2026-03-30" }], tasks });
+    const result = validateDag({ kind: "feature", name: "auth" }, tmpDir);
+    expect(result.info.filter((e) => e.type === "orphan-label")).toHaveLength(0);
+  });
+
+  it("depth ≤ 1 IDs (epic-shaped) are skipped — no info entries for top-level items", () => {
+    // FORGE-1, FORGE-2, FORGE-3 are depth 1 — siblings of nothing meaningful.
+    // We can't put them into tasks.json easily because they look like epics, but
+    // we can simulate by writing tasks at depth 1 (e.g. FORGE-7 directly).
+    // Use depth-1 task IDs that match the project prefix.
+    const tasks: Task[] = [
+      makeTask("FORGE-1", ["frontend"]),
+      makeTask("FORGE-2", []),
+      makeTask("FORGE-3", []),
+    ];
+    // No epic for these (orphan-epic will fire), but we only care about info.
+    setupFeature(tmpDir, "auth", { version: 1, epics: [
+      { id: "FORGE-1", title: "E1", created: "2026-03-30" },
+      { id: "FORGE-2", title: "E2", created: "2026-03-30" },
+      { id: "FORGE-3", title: "E3", created: "2026-03-30" },
+    ], tasks });
+    const result = validateDag({ kind: "feature", name: "auth" }, tmpDir);
+    expect(result.info.filter((e) => e.type === "orphan-label")).toHaveLength(0);
+  });
+
+  it("per-group, NOT global: label is orphan in one group, shared in another → info fires only where orphan", () => {
+    const tasks: Task[] = [
+      // Group FORGE-1: 'frontend' appears once → orphan in this group
+      makeTask("FORGE-1.1", ["frontend"]),
+      makeTask("FORGE-1.2", []),
+      makeTask("FORGE-1.3", []),
+      // Group FORGE-2: 'frontend' shared by 2 → not orphan
+      makeTask("FORGE-2.1", ["frontend"]),
+      makeTask("FORGE-2.2", ["frontend"]),
+      makeTask("FORGE-2.3", []),
+    ];
+    setupFeature(tmpDir, "auth", { version: 1, epics: [
+      { id: "FORGE-1", title: "E1", created: "2026-03-30" },
+      { id: "FORGE-2", title: "E2", created: "2026-03-30" },
+    ], tasks });
+    const result = validateDag({ kind: "feature", name: "auth" }, tmpDir);
+    const orphans = result.info.filter((e) => e.type === "orphan-label");
+    expect(orphans).toHaveLength(1);
+    expect(orphans[0].ids).toEqual(["FORGE-1.1"]);
+    expect(orphans[0].message).toContain("FORGE-1 sibling group");
+  });
+
+  it("info entries land in result.info; result.warnings and result.valid are unaffected", () => {
+    const tasks: Task[] = [
+      makeTask("FORGE-1.1", ["frontend"]),
+      makeTask("FORGE-1.2", []),
+      makeTask("FORGE-1.3", []),
+    ];
+    setupFeature(tmpDir, "auth", { version: 1, epics: [{ id: "FORGE-1", title: "Auth", created: "2026-03-30" }], tasks });
+    const result = validateDag({ kind: "feature", name: "auth" }, tmpDir);
+    expect(result.info.length).toBeGreaterThan(0);
+    expect(result.warnings).toEqual([]);
+    expect(result.valid).toBe(true);
+  });
+
+  it("deeper depths: depth-3 siblings (e.g. FORGE-1.1.1) form their own sibling group keyed by FORGE-1.1", () => {
+    const tasks: Task[] = [
+      makeTask("FORGE-1.1", []),
+      makeTask("FORGE-1.1.1", ["backend"]),
+      makeTask("FORGE-1.1.2", []),
+      makeTask("FORGE-1.1.3", []),
+    ];
+    setupFeature(tmpDir, "auth", { version: 1, epics: [{ id: "FORGE-1", title: "Auth", created: "2026-03-30" }], tasks });
+    const result = validateDag({ kind: "feature", name: "auth" }, tmpDir);
+    const orphans = result.info.filter((e) => e.type === "orphan-label");
+    expect(orphans).toHaveLength(1);
+    expect(orphans[0].ids).toEqual(["FORGE-1.1.1"]);
+    expect(orphans[0].message).toContain("FORGE-1.1 sibling group");
   });
 });
 

@@ -6,7 +6,7 @@ import { join } from "path";
 import { resolveRepoRoot } from "../worktree";
 import type { Epic, Task, ValidationError, ValidationResult, ValidateScope } from "./types";
 import { TASKS_FILENAME } from "./types";
-import { discoverTaskFilesFromRoot, readTasksFile } from "./io";
+import { discoverTaskFilesFromRoot, idDepth, readTasksFile } from "./io";
 
 /**
  * Validate the task DAG for a feature, project-level tasks, or everything.
@@ -186,7 +186,8 @@ export function validateDag(scope: ValidateScope, cwd?: string): ValidationResul
     }
   }
 
-  // 5. Empty acceptance warning (open tasks only, scoped to target tasks)
+  // 5. Empty acceptance warning (FORGE-6.3): open tasks with no acceptance
+  // criteria. Closed and in_progress tasks are exempt.
   for (const task of targetTasks) {
     if (task.status === "open" && task.acceptance.length === 0) {
       warnings.push({
@@ -195,6 +196,50 @@ export function validateDag(scope: ValidateScope, cwd?: string): ValidationResul
         message: `Task ${task.id} has no acceptance criteria`,
         ids: [task.id],
       });
+    }
+  }
+
+  // 6. Orphan-label info (FORGE-6.4): bare labels appearing on exactly one
+  // task within a sibling group. Sibling = same immediate parent, derived by
+  // dropping the last '.N' segment of the ID. Labels containing ':' are
+  // prefix-namespaced metadata (phase:N, gate:human, complexity:N) and are
+  // exempt. Tasks at depth ≤ 1 (epic-shaped IDs) have no sibling group and
+  // are skipped entirely.
+  const groupMap = new Map<string, Task[]>();
+  for (const task of targetTasks) {
+    if (idDepth(task.id) <= 1) continue;
+    const lastDot = task.id.lastIndexOf(".");
+    if (lastDot === -1) continue;
+    const parentId = task.id.substring(0, lastDot);
+    const group = groupMap.get(parentId);
+    if (group) {
+      group.push(task);
+    } else {
+      groupMap.set(parentId, [task]);
+    }
+  }
+  for (const [parentId, groupTasks] of groupMap) {
+    // Count bare labels across the group.
+    const labelCounts = new Map<string, number>();
+    for (const task of groupTasks) {
+      for (const label of task.labels) {
+        if (label.includes(":")) continue;
+        labelCounts.set(label, (labelCounts.get(label) ?? 0) + 1);
+      }
+    }
+    // Emit info for tasks carrying a label with count === 1.
+    for (const task of groupTasks) {
+      for (const label of task.labels) {
+        if (label.includes(":")) continue;
+        if (labelCounts.get(label) === 1) {
+          info.push({
+            type: "orphan-label",
+            severity: "info",
+            message: `Label '${label}' on task ${task.id} appears on only one task in the ${parentId} sibling group`,
+            ids: [task.id],
+          });
+        }
+      }
     }
   }
 
