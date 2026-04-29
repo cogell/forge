@@ -703,7 +703,7 @@
     {
       "id": "FORGE-7.4",
       "title": "Skill prompt: human-gated task gate in plugin/commands/run.md",
-      "status": "open",
+      "status": "closed",
       "priority": 2,
       "labels": [
         "complexity:2",
@@ -726,7 +726,7 @@
         "FORGE-7.3"
       ],
       "comments": [],
-      "closeReason": null
+      "closeReason": "Implemented; markdown + binding test (positive presence of 'Task FAKE-1 not found'); review PASS."
     }
   ]
 }
