@@ -1261,6 +1261,25 @@ describe("forge tasks CLI", () => {
     expect(logs).toContain("No ready tasks");
   });
 
+  it("ready --json output includes gated:boolean on every element (FORGE-7.1)", async () => {
+    setupFeature(tmp, "auth", readyFixture());
+    await tasks(["ready", "--json"]);
+
+    const output = logSpy.mock.calls[0][0];
+    const parsed = JSON.parse(output);
+    expect(parsed.length).toBeGreaterThan(0);
+    for (const t of parsed) {
+      expect(typeof t.gated).toBe("boolean");
+    }
+    // The fixture has TEST-1.1 with "gate:human" → gated=true, others → gated=false.
+    const byId = Object.fromEntries(parsed.map((t: any) => [t.id, t]));
+    expect(byId["TEST-1.1"].gated).toBe(true);
+    expect(byId["TEST-1.2"].gated).toBe(false);
+    expect(byId["TEST-1.3"].gated).toBe(false);
+    expect(byId["TEST-1.4"].gated).toBe(false);
+    expect(byId["TEST-1.5"].gated).toBe(false);
+  });
+
   // ── show --children / --full recursion (FORGE-3.5) ─────────────
 
   function childrenFixture(): TasksFile {
@@ -1376,6 +1395,107 @@ describe("forge tasks CLI", () => {
     } catch {}
     expect(exitSpy).toHaveBeenCalledWith(1);
     expect(errorSpy.mock.calls.some((c: string[]) => c[0]?.includes("not found"))).toBe(true);
+  });
+
+  // ── forge tasks gate clear (FORGE-7.3) ───────────────────
+
+  it("gate clear removes gate:human label and exits 0", async () => {
+    const tasksData: TasksFile = {
+      version: 1,
+      epics: [{ id: "TEST-1", title: "P5", created: "2026-04-29" }],
+      tasks: [
+        { id: "TEST-1.1", title: "Gated task", status: "open", priority: 2, labels: ["gate:human", "phase:5"], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: null },
+      ],
+    };
+    setupFeature(tmp, "auth", tasksData);
+
+    await tasks(["gate", "clear", "TEST-1.1"]);
+
+    const data = readJson(join(tmp, "plans", "auth", TASKS_FILENAME));
+    expect(data.tasks[0].labels).toEqual(["phase:5"]);
+    expect(exitSpy).not.toHaveBeenCalled();
+  });
+
+  it("gate clear is idempotent (no-op when label absent)", async () => {
+    const tasksData: TasksFile = {
+      version: 1,
+      epics: [{ id: "TEST-1", title: "P5", created: "2026-04-29" }],
+      tasks: [
+        { id: "TEST-1.1", title: "Gated task", status: "open", priority: 2, labels: ["gate:human", "phase:5"], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: null },
+      ],
+    };
+    setupFeature(tmp, "auth", tasksData);
+    const filePath = join(tmp, "plans", "auth", TASKS_FILENAME);
+
+    await tasks(["gate", "clear", "TEST-1.1"]);
+    const afterFirst = readFileSync(filePath, "utf-8");
+
+    await tasks(["gate", "clear", "TEST-1.1"]);
+    const afterSecond = readFileSync(filePath, "utf-8");
+
+    expect(afterSecond).toBe(afterFirst);
+    expect(exitSpy).not.toHaveBeenCalled();
+  });
+
+  it("gate clear UNKNOWN-ID exits non-zero with verbatim not-found message", async () => {
+    const tasksData: TasksFile = {
+      version: 1,
+      epics: [{ id: "TEST-1", title: "P5", created: "2026-04-29" }],
+      tasks: [
+        { id: "TEST-1.1", title: "T", status: "open", priority: 2, labels: ["gate:human"], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: null },
+      ],
+    };
+    setupFeature(tmp, "auth", tasksData);
+    const filePath = join(tmp, "plans", "auth", TASKS_FILENAME);
+    const before = readFileSync(filePath, "utf-8");
+
+    try { await tasks(["gate", "clear", "UNKNOWN-ID"]); } catch {}
+
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    expect(errorSpy).toHaveBeenCalledWith(
+      'Task "UNKNOWN-ID" not found in any tasks.json file.',
+    );
+    // tasks.json must be unmodified
+    expect(readFileSync(filePath, "utf-8")).toBe(before);
+  });
+
+  it("gate (no action) exits non-zero with 'Unknown gate subcommand' on stderr", async () => {
+    setupFeature(tmp, "auth");
+    await tasks(["auth"]);
+
+    try { await tasks(["gate"]); } catch {}
+
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining("Unknown gate subcommand"),
+    );
+  });
+
+  it("gate foo exits non-zero and names the bad action", async () => {
+    setupFeature(tmp, "auth");
+    await tasks(["auth"]);
+
+    try { await tasks(["gate", "foo"]); } catch {}
+
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining("Unknown gate subcommand: foo"),
+    );
+  });
+
+  it("forge tasks --help mentions the gate subcommand", async () => {
+    await tasks(["--help"]);
+
+    const helpOutput = logSpy.mock.calls.map((c: string[]) => c[0] ?? "").join("\n");
+    expect(helpOutput).toContain("gate clear");
+  });
+
+  it("forge tasks gate --help shows gate-specific help", async () => {
+    await tasks(["gate", "--help"]);
+
+    const helpOutput = logSpy.mock.calls.map((c: string[]) => c[0] ?? "").join("\n");
+    expect(helpOutput).toContain("forge tasks gate");
+    expect(helpOutput).toContain("clear");
   });
 
   // ── forge tasks edit (FORGE-4.3) ─────────────────────────

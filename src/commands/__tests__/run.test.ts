@@ -9,10 +9,11 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, spyOn } from "bun:test";
-import { mkdirSync, writeFileSync, rmSync, existsSync } from "fs";
+import { mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from "fs";
 import { join } from "path";
 import { makeTmpDir, setupTestProject } from "../../__tests__/helpers";
 import { run, detectDirtyPlanningArtifacts, type GitRunner } from "../run";
+import { tasks } from "../tasks";
 
 function setupFeature(dir: string, feature: string): void {
   const featureDir = join(dir, "plans", feature);
@@ -400,5 +401,54 @@ describe("detectDirtyPlanningArtifacts", () => {
       "plans/auth/tasks.json",
     ]);
     expect(calls[0].cwd).toBe("/some/cwd");
+  });
+});
+
+// ─── FORGE-7.4: human-gated task prompt binding (skill ↔ CLI) ───────────────
+
+describe("FORGE-7.4 human-gated task prompt", () => {
+  let tmp: string;
+  let originalCwd: string;
+  let logSpy: ReturnType<typeof spyOn>;
+  let errorSpy: ReturnType<typeof spyOn>;
+  let exitSpy: ReturnType<typeof spyOn>;
+
+  beforeEach(() => {
+    tmp = makeTmpDir("forge-run-gate");
+    originalCwd = process.cwd();
+    process.chdir(tmp);
+    setupTestProject(tmp, "TEST");
+    logSpy = spyOn(console, "log").mockImplementation(() => {});
+    errorSpy = spyOn(console, "error").mockImplementation(() => {});
+    exitSpy = spyOn(process, "exit").mockImplementation((() => {
+      throw new Error("exit");
+    }) as never);
+  });
+
+  afterEach(() => {
+    process.chdir(originalCwd);
+    logSpy.mockRestore();
+    errorSpy.mockRestore();
+    exitSpy.mockRestore();
+    if (existsSync(tmp)) rmSync(tmp, { recursive: true, force: true });
+  });
+
+  it("(a) plugin/commands/run.md contains 'forge tasks gate clear'", () => {
+    // Read the skill markdown from the repo root (originalCwd before chdir).
+    const md = readFileSync(join(originalCwd, "plugin", "commands", "run.md"), "utf-8");
+    expect(md).toContain("forge tasks gate clear");
+  });
+
+  it("(b) tasks(['gate','clear','FAKE-1']) on a fixture without FAKE-1 emits 'Task \"FAKE-1\" not found' (positive presence — proves dispatcher routes gate clear through clearGate)", async () => {
+    // No FAKE-1 task seeded — the dispatcher must route 'gate clear FAKE-1'
+    // through handleGate -> clearGate, and clearGate's 'Task "<id>" not found'
+    // error must surface verbatim. If 'clear' were renamed (e.g. to 'release'),
+    // handleGate would emit 'Unknown gate subcommand' instead and this assertion
+    // would fail — catching the rename.
+    try {
+      await tasks(["gate", "clear", "FAKE-1"]);
+    } catch {}
+    const stderr = errorSpy.mock.calls.flat().join("");
+    expect(stderr).toContain('Task "FAKE-1" not found');
   });
 });

@@ -3,7 +3,7 @@
  */
 
 import { describe, expect, it, beforeEach, afterEach } from "bun:test";
-import { mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from "fs";
+import { mkdirSync, writeFileSync, readFileSync, rmSync, existsSync, statSync } from "fs";
 import { join } from "path";
 import { makeTmpDir } from "../../__tests__/helpers";
 import {
@@ -27,6 +27,7 @@ import {
   updateTask,
   addComment,
   addLabel,
+  clearGate,
   deleteTask,
   validateDag,
   resolveTasksPath,
@@ -34,6 +35,7 @@ import {
   hashTask,
   ConcurrentWriteError,
   COMMIT_PLAN_TEMPLATE,
+  GATE_LABEL_HUMAN,
 } from "../tasks";
 import type { TasksFile, Task, Epic, Comment, TaskStatus, EpicInfo, ReadyTask, ValidateScope } from "../tasks";
 
@@ -287,6 +289,7 @@ describe("type definitions", () => {
       title: "Do something",
       priority: 1,
       labels: ["backend"],
+      gated: false,
     };
     expect(task.id).toBe("T-001");
     expect(task.labels).toContain("backend");
@@ -685,6 +688,7 @@ describe("getReadyTasks", () => {
       title: "My Task",
       priority: 3,
       labels: ["backend", "complexity:5"],
+      gated: false,
     });
   });
 
@@ -1773,6 +1777,125 @@ describe("addLabel", () => {
     await addLabel("FORGE-1.1", "needs-human", tmpDir); // duplicate
     const data = readJson(join(tmpDir, "plans", "auth", TASKS_FILENAME));
     expect(data.tasks[0].labels).toEqual(["needs-human"]);
+  });
+});
+
+// ─── clearGate ──────────────────────────────────────────────────────
+
+describe("clearGate", () => {
+  let tmpDir: string;
+
+  beforeEach(() => { tmpDir = makeTmpDir(); setupProject(tmpDir, "FORGE"); });
+  afterEach(() => { rmSync(tmpDir, { recursive: true, force: true }); });
+
+  // Capture mtime + content snapshot to verify no-write paths.
+  // Bun + APFS update mtime on every write (even identical content), so
+  // mtime-equal across before/after proves no write occurred. Content
+  // equality is belt-and-suspenders.
+  const fileFingerprint = (fp: string): { mtimeMs: number; content: string } => ({
+    mtimeMs: statSync(fp).mtimeMs,
+    content: readFileSync(fp, "utf-8"),
+  });
+
+  it("removes gate:human label and persists the change (AC1)", async () => {
+    const tasks: Task[] = [
+      { id: "FORGE-1.1", title: "T", status: "open", priority: 2, labels: [GATE_LABEL_HUMAN, "other"], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: null },
+    ];
+    setupFeature(tmpDir, "auth", { version: 1, epics: [{ id: "FORGE-1", title: "Auth", created: "2026-03-30" }], tasks });
+    await clearGate("FORGE-1.1", tmpDir);
+    const data = readJson(join(tmpDir, "plans", "auth", TASKS_FILENAME));
+    expect(data.tasks[0].labels).toEqual(["other"]);
+    expect(data.tasks[0].labels.includes(GATE_LABEL_HUMAN)).toBe(false);
+  });
+
+  it("is idempotent — second call is a no-op (AC2)", async () => {
+    const tasks: Task[] = [
+      { id: "FORGE-1.1", title: "T", status: "open", priority: 2, labels: [GATE_LABEL_HUMAN], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: null },
+    ];
+    setupFeature(tmpDir, "auth", { version: 1, epics: [{ id: "FORGE-1", title: "Auth", created: "2026-03-30" }], tasks });
+    await clearGate("FORGE-1.1", tmpDir);
+    // Second call on same task should not throw and should leave labels empty.
+    await clearGate("FORGE-1.1", tmpDir);
+    const data = readJson(join(tmpDir, "plans", "auth", TASKS_FILENAME));
+    expect(data.tasks[0].labels).toEqual([]);
+  });
+
+  it("does not write the file when label is absent (AC3)", async () => {
+    const tasks: Task[] = [
+      { id: "FORGE-1.1", title: "T", status: "open", priority: 2, labels: ["other"], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: null },
+    ];
+    setupFeature(tmpDir, "auth", { version: 1, epics: [{ id: "FORGE-1", title: "Auth", created: "2026-03-30" }], tasks });
+    const fp = join(tmpDir, "plans", "auth", TASKS_FILENAME);
+    const before = fileFingerprint(fp);
+    await clearGate("FORGE-1.1", tmpDir);
+    const after = fileFingerprint(fp);
+    // mtime-equal proves no write occurred (Bun + APFS update mtime even on
+    // identical-content writes). Content hash equality is belt-and-suspenders.
+    expect(after.mtimeMs).toBe(before.mtimeMs);
+    expect(after.content).toBe(before.content);
+  });
+
+  it("throws standard not-found error on unknown ID and leaves file unmodified (AC4)", async () => {
+    const tasks: Task[] = [
+      { id: "FORGE-1.1", title: "T", status: "open", priority: 2, labels: [GATE_LABEL_HUMAN], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: null },
+    ];
+    setupFeature(tmpDir, "auth", { version: 1, epics: [{ id: "FORGE-1", title: "Auth", created: "2026-03-30" }], tasks });
+    const fp = join(tmpDir, "plans", "auth", TASKS_FILENAME);
+    const before = fileFingerprint(fp);
+
+    let err: unknown;
+    try {
+      await clearGate("UNKNOWN-ID", tmpDir);
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toBe(`Task "UNKNOWN-ID" not found in any tasks.json file.`);
+
+    const after = fileFingerprint(fp);
+    expect(after.mtimeMs).toBe(before.mtimeMs);
+    expect(after.content).toBe(before.content);
+  });
+
+  it("removes all duplicate gate:human entries (AC5)", async () => {
+    const tasks: Task[] = [
+      { id: "FORGE-1.1", title: "T", status: "open", priority: 2, labels: [GATE_LABEL_HUMAN, "x", GATE_LABEL_HUMAN, "y"], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: null },
+    ];
+    setupFeature(tmpDir, "auth", { version: 1, epics: [{ id: "FORGE-1", title: "Auth", created: "2026-03-30" }], tasks });
+    await clearGate("FORGE-1.1", tmpDir);
+    const data = readJson(join(tmpDir, "plans", "auth", TASKS_FILENAME));
+    const labels: string[] = data.tasks[0].labels;
+    expect(labels.filter((l) => l === GATE_LABEL_HUMAN).length).toBe(0);
+    expect(labels.includes(GATE_LABEL_HUMAN)).toBe(false);
+    expect(labels).toEqual(["x", "y"]);
+  });
+
+  it("works on a closed task — no status guard (AC6)", async () => {
+    const tasks: Task[] = [
+      { id: "FORGE-1.1", title: "T", status: "closed", priority: 2, labels: [GATE_LABEL_HUMAN], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: "done" },
+    ];
+    setupFeature(tmpDir, "auth", { version: 1, epics: [{ id: "FORGE-1", title: "Auth", created: "2026-03-30" }], tasks });
+    await clearGate("FORGE-1.1", tmpDir);
+    const data = readJson(join(tmpDir, "plans", "auth", TASKS_FILENAME));
+    expect(data.tasks[0].labels).toEqual([]);
+    expect(data.tasks[0].status).toBe("closed");
+  });
+
+  it("threads cwd parameter without process.chdir (AC7)", async () => {
+    // Set up two separate tmp roots; only operate against tmpDir, the helper one.
+    const tasks: Task[] = [
+      { id: "FORGE-1.1", title: "T", status: "open", priority: 2, labels: [GATE_LABEL_HUMAN], description: "", design: "", acceptance: [], notes: "", dependencies: [], comments: [], closeReason: null },
+    ];
+    setupFeature(tmpDir, "auth", { version: 1, epics: [{ id: "FORGE-1", title: "Auth", created: "2026-03-30" }], tasks });
+
+    // We never call process.chdir; cwd-threading is the only way clearGate
+    // can find the file under tmpDir/plans/.
+    const cwdBefore = process.cwd();
+    await clearGate("FORGE-1.1", tmpDir);
+    expect(process.cwd()).toBe(cwdBefore);
+
+    const data = readJson(join(tmpDir, "plans", "auth", TASKS_FILENAME));
+    expect(data.tasks[0].labels).toEqual([]);
   });
 });
 
@@ -3048,6 +3171,101 @@ describe("getReadyTasks label filter", () => {
     const result = getReadyTasks(tmpDir, "alpha", { labels: ["gate:human"] });
     expect(result).toHaveLength(1);
     expect(result[0].id).toBe("alpha-1.1");
+  });
+});
+
+// ─── getReadyTasks gated flag (FORGE-7.1) ────────────────────────────
+
+describe("getReadyTasks gated flag", () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = makeTmpDir();
+    mkdirSync(join(tmpDir, ".git"), { recursive: true });
+  });
+
+  afterEach(() => {
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("gated=false when task has no labels", () => {
+    const data = makeTasksFile(
+      [{ id: "feat-1", title: "Phase 1", created: "2026-03-30" }],
+      [makeTask({ id: "feat-1.1", title: "A", status: "open", labels: [] })],
+    );
+    writePlansDir(tmpDir, { "my-feature": data });
+
+    const result = getReadyTasks(tmpDir);
+    expect(result).toHaveLength(1);
+    expect(result[0].gated).toBe(false);
+  });
+
+  it("gated=true when task has only gate:human label", () => {
+    const data = makeTasksFile(
+      [{ id: "feat-1", title: "Phase 1", created: "2026-03-30" }],
+      [makeTask({ id: "feat-1.1", title: "A", status: "open", labels: ["gate:human"] })],
+    );
+    writePlansDir(tmpDir, { "my-feature": data });
+
+    const result = getReadyTasks(tmpDir);
+    expect(result).toHaveLength(1);
+    expect(result[0].gated).toBe(true);
+  });
+
+  it("gated=true when task has gate:human alongside other labels", () => {
+    const data = makeTasksFile(
+      [{ id: "feat-1", title: "Phase 1", created: "2026-03-30" }],
+      [
+        makeTask({
+          id: "feat-1.1",
+          title: "A",
+          status: "open",
+          labels: ["frontend", "gate:human", "phase:5"],
+        }),
+      ],
+    );
+    writePlansDir(tmpDir, { "my-feature": data });
+
+    const result = getReadyTasks(tmpDir);
+    expect(result).toHaveLength(1);
+    expect(result[0].gated).toBe(true);
+  });
+
+  it("gated=false when task has only non-gate labels", () => {
+    const data = makeTasksFile(
+      [{ id: "feat-1", title: "Phase 1", created: "2026-03-30" }],
+      [
+        makeTask({
+          id: "feat-1.1",
+          title: "A",
+          status: "open",
+          labels: ["frontend", "needs-design", "phase:5"],
+        }),
+      ],
+    );
+    writePlansDir(tmpDir, { "my-feature": data });
+
+    const result = getReadyTasks(tmpDir);
+    expect(result).toHaveLength(1);
+    expect(result[0].gated).toBe(false);
+  });
+
+  it("--label gate:human filter returns only gated=true tasks (AC2 composes)", () => {
+    const data = makeTasksFile(
+      [{ id: "feat-1", title: "Phase 1", created: "2026-03-30" }],
+      [
+        makeTask({ id: "feat-1.1", title: "Gated", status: "open", labels: ["gate:human"] }),
+        makeTask({ id: "feat-1.2", title: "Plain", status: "open", labels: ["backend"] }),
+        makeTask({ id: "feat-1.3", title: "Mixed", status: "open", labels: ["gate:human", "frontend"] }),
+      ],
+    );
+    writePlansDir(tmpDir, { "my-feature": data });
+
+    const result = getReadyTasks(tmpDir, undefined, { labels: ["gate:human"] });
+    expect(result).toHaveLength(2);
+    for (const t of result) {
+      expect(t.gated).toBe(true);
+    }
   });
 });
 

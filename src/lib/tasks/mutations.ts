@@ -8,7 +8,7 @@ import { basename, dirname, join } from "path";
 import { withLock } from "../lock";
 import { resolveRepoRoot } from "../worktree";
 import type { Task, TasksFile, TaskStatus } from "./types";
-import { MAX_NESTING_DEPTH, SCHEMA_VERSION, TASKS_FILENAME } from "./types";
+import { GATE_LABEL_HUMAN, MAX_NESTING_DEPTH, SCHEMA_VERSION, TASKS_FILENAME } from "./types";
 import { readProjectPrefix } from "./config";
 import { hashTask } from "./editor";
 import {
@@ -653,5 +653,30 @@ export async function addLabel(id: string, label: string, cwd?: string): Promise
       task.labels.push(label);
       writeTasksFileRaw(filePath, data);
     }
+  });
+}
+
+/**
+ * Clear the human-gate label from a task (idempotent — no-op when absent).
+ *
+ * Mirrors `addLabel`'s shape: atomic-write under file lock, no status guard
+ * (works on closed tasks too), and skips the disk write when the label is
+ * already absent. Defensive `filter` removes duplicate `gate:human` entries
+ * if any slipped in; the length-equality check handles the no-write path.
+ *
+ * On unknown ID, `findTaskInRoot` throws the standard
+ * `Task "<id>" not found in any tasks.json file.` — let it bubble.
+ */
+export async function clearGate(id: string, cwd?: string): Promise<void> {
+  const root = resolveRepoRoot(cwd);
+  const { filePath } = findTaskInRoot(id, root);
+
+  return withLock(filePath, () => {
+    const { data, taskIndex } = reloadTask(filePath, id);
+    const task = data.tasks[taskIndex];
+    const newLabels = task.labels.filter((l) => l !== GATE_LABEL_HUMAN);
+    if (newLabels.length === task.labels.length) return; // no-write path
+    task.labels = newLabels;
+    writeTasksFileRaw(filePath, data);
   });
 }
