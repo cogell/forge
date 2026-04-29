@@ -10,6 +10,11 @@
       "id": "FORGE-4",
       "title": "Phase 2: forge tasks edit — editor-mode for humans",
       "created": "2026-04-16"
+    },
+    {
+      "id": "FORGE-5",
+      "title": "Phase 3: forge run orchestration — two-layer changes",
+      "created": "2026-04-28"
     }
   ],
   "tasks": [
@@ -340,6 +345,123 @@
       ],
       "comments": [],
       "closeReason": "completed"
+    },
+    {
+      "id": "FORGE-5.1",
+      "title": "queries.ts: nextOpenPhase auto-detect",
+      "status": "closed",
+      "priority": 1,
+      "labels": [
+        "complexity:4",
+        "phase:3"
+      ],
+      "description": "WHAT: Add a pure query that, given a feature name, returns the lowest phase number with open work or a structured halt diagnostic. This is the foundation that the run.ts JSON output will consume in FORGE-5.3. Pure function — no I/O beyond the existing readTasksFile path used by other queries.",
+      "design": "HOW: Add to src/lib/tasks/queries.ts — export function nextOpenPhase(feature: string, cwd?: string): { phase: number | null, diagnostic: string | null }. Algorithm: first, if the feature directory does not exist (e.g. plans/<feature>/ is missing or contains no tasks.json), return { phase: null, diagnostic: 'no tasks.json found for feature' } — distinct from the exhaustion case so consumers can tell 'feature unknown' from 'all phases closed'. Otherwise: load tasks for the feature; collect the set of N values where any task carries a label of form `${PHASE_LABEL_PREFIX}${N}` (parse N as integer; ignore unparseable); ascending scan over that set: for each N, if any phase:N task is in_progress → return { phase: null, diagnostic: \"phase ${N} has in-progress tasks — resume explicitly via --phase ${N} or close them first\" }; else if any is open → return { phase: N, diagnostic: null }; else continue. Exhausted → { phase: null, diagnostic: \"all phases closed for this feature\" }. Tasks with no phase:* label are ignored entirely. Use the named constant PHASE_LABEL_PREFIX from src/lib/tasks/types.ts — do not hardcode \"phase:\".\n\n**Label parsing corners.** Use `parseInt(N, 10)` and discard the label if `Number.isNaN(parsed)` or the label has no value after `phase:`. Specifically: `phase:` (empty N) → discarded; `phase:abc` → discarded; `phase:01` → 1 (parseInt's normal behavior). The plan authorizes only positive integer phase numbers; `phase:0` and `phase:-1` are technically not rejected (the scan is integer-ascending and would include them), but they are not features the plan or PRD request. A task carrying multiple `phase:N` labels (e.g. both `phase:2` and `phase:3`) participates in each phase's set independently — its status is consulted in both N=2 and N=3 iterations of the scan.",
+      "acceptance": [
+        "Returns { phase: 2, diagnostic: null } when phases 1 and 2 have tasks, phase 1 is all closed, phase 2 has at least one open task.",
+        "Returns { phase: null, diagnostic: \"phase N has in-progress tasks — resume explicitly via --phase N or close them first\" } (with N substituted) when any phase:N task in the lowest non-closed phase has status in_progress. Test asserts the literal substring 'has in-progress tasks — resume explicitly via --phase' to lock the plan-line-186 wording.",
+        "Returns { phase: null, diagnostic: \"all phases closed for this feature\" } when the feature has tasks but every phase:N task is closed (the algorithm's exhaustion fallthrough).",
+        "Returns { phase: null, diagnostic: \"no tasks.json found for feature\" } when plans/<feature>/tasks.json does not exist — distinct from the all-closed diagnostic so callers can disambiguate 'feature unknown' from 'all phases closed'.",
+        "Tasks with no phase:* label are ignored — present-but-unlabeled open tasks do not influence the result. A task carrying multiple phase:N labels (e.g. both phase:2 and phase:3) participates in each phase's scan iteration independently.",
+        "Label corner cases: `phase:` (empty value) and `phase:abc` (non-numeric) are discarded by the parseInt + Number.isNaN guard. `phase:01` parses to 1.",
+        "Multiple phases ascending: phases 1, 2, 3 each present; only phase 3 has open work → returns { phase: 3, diagnostic: null }.",
+        "Empty feature (feature exists but tasks.json has zero tasks) returns { phase: null, diagnostic: \"all phases closed for this feature\" } via exhaustion.",
+        "Uses PHASE_LABEL_PREFIX constant from types.ts (grep test in implementation review).",
+        "Co-located unit tests cover every branch above.",
+        "pnpm test passes; pnpm typecheck passes."
+      ],
+      "notes": "Files: src/lib/tasks/queries.ts (modify — add nextOpenPhase), src/lib/__tests__/tasks.test.ts (extend with branch coverage). No dependencies on other Phase 3 tasks — this is the foundation.",
+      "dependencies": [],
+      "comments": [],
+      "closeReason": "Implemented; 11 unit tests cover all branches; review PASS"
+    },
+    {
+      "id": "FORGE-5.2",
+      "title": "run.ts: --epic/--phase flags + relaxed feature guard",
+      "status": "closed",
+      "priority": 1,
+      "labels": [
+        "complexity:4",
+        "phase:3"
+      ],
+      "description": "WHAT: Add --epic <id> and --phase <N> flag parsing to forge run. They are mutually exclusive (exit 2). --epic alone is sufficient — relax the existing 'if (!feature)' guard at src/commands/run.ts:18 so --epic without a feature positional succeeds. --phase still requires the feature positional (exits 1 with the existing missing-feature pattern, but with a more specific message).",
+      "design": "HOW: Modify src/commands/run.ts. **Critical implementation note**: the existing argument parser at src/commands/run.ts:16 uses `args.find((a) => !a.startsWith('-'))` and has no concept of value-flags. With `forge run --epic SK-5`, args = ['--epic', 'SK-5'] and the current code would mis-classify 'SK-5' as the feature positional. Phase 3 must therefore introduce minimal value-flag handling in run.ts (do not import the tasks.ts dispatcher — that lives behind a different entry point). Recommended approach: add a small helper that walks args once, splitting into (a) positional values, (b) boolean flags, (c) value-flag pairs for --epic and --phase. Use the result to compute `feature`, `epicFlag`, `phaseFlag` instead of the existing `args.find(...)`.\n\n**Critical: no-feature path must skip feature-scoped precondition checks.** The current run.ts at lines 24-25 builds prdFile/planFile from `feature`, and the checks at lines 38-46 and 52-62 all key off it. When --epic alone is supplied (no feature positional), those checks must be skipped — otherwise join(cwd, 'plans', undefined, 'prd.md') produces 'plans/undefined/prd.md', hasPrd is false, and the command exits 1 with error: 'no-prd'. Guard the feature-scoped block behind `if (feature) { ... }` so the --epic-alone path emits a JSON object containing { epic, phase, ...meta } and exits 0 without touching the PRD/plan/epic existence checks.\n\nOrder of operations inside run():\n1) Parse args into { feature, epicFlag, phaseFlag, json } using the new value-flag-aware parser.\n2) Mutex check first: if (epicFlag && phaseFlag) → console.error('--epic and --phase are mutually exclusive') and process.exit(2).\n3) Relax the no-feature guard:\n   - if (!feature && epicFlag) → proceed (no-feature path is now valid because epics are project-wide unique via .epic-lock); skip the feature-scoped precondition block; emit JSON { epic, phase, ...meta } and exit 0.\n   - if (!feature && phaseFlag) → console.error('--phase requires a feature positional') and process.exit(1).\n   - if (!feature && !epicFlag && !phaseFlag) → keep the existing 'Usage:' message and process.exit(1).\n4) Validate --phase numeric: if phaseFlag is supplied, it must parse as an integer (Number.isInteger(Number(phaseFlag))); otherwise console.error and exit 1.\n5) **Pin the literal JSON keys**: the precondition output object must include `epic: string | null` and `phase: number | null`. These exact key names are the contract that FORGE-5.4's skill layer reads. Do not yet populate suggestedPhase / suggestedPhaseDiagnostic / planningArtifactsDirty — those are FORGE-5.3's scope; the skill layer will see them once both ship in the same release before FORGE-5.4 lands.",
+      "acceptance": [
+        "forge run <feature> --epic X --phase Y exits 2 with a stderr message naming both flags as mutually exclusive.",
+        "forge run --epic SK-5 (no feature positional) exits 0 with --json output containing { epic: 'SK-5', phase: null, ... } and does NOT print 'no-prd'/'no-plan'/'no-epic' errors (feature-scoped precondition checks are skipped).",
+        "forge run --phase 5 (no feature positional) exits 1 with a stderr message matching /--phase requires a feature positional/.",
+        "forge run with no args still exits 1 with the existing 'Usage:' message (backward compat).",
+        "JSON precondition output object contains literal keys 'epic' (string | null) and 'phase' (number | null) regardless of which combination of flags was supplied.",
+        "--phase <N> rejects non-integer values (e.g. --phase abc) with a clear stderr message and non-zero exit.",
+        "Co-located tests in src/commands/__tests__/run.test.ts (new) cover: mutex, --epic alone (asserts no precondition errors fire), --phase without feature, invalid --phase value, no args, value-flag-aware parsing of '--epic SK-5' (positional must NOT be set to 'SK-5').",
+        "`forge run \"\" --epic SK-5` (empty-string positional) is treated as no-feature — the empty string is falsy, so the relaxed no-feature guard applies and the --epic-alone path runs. Behaves identically to omitting the positional entirely.",
+        "pnpm test passes; pnpm typecheck passes."
+      ],
+      "notes": "Files: src/commands/run.ts (modify), src/commands/__tests__/run.test.ts (new). No dependency on FORGE-5.1 — this is independent CLI plumbing. FORGE-5.3 will build on top of this to populate suggestedPhase + planningArtifactsDirty. | Scope note: the `--phase <N>` integer-validation acceptance bullet (rejecting `--phase abc`) is a deliberate addition beyond the plan's literal text. It prevents NaN propagation downstream and is small enough to land here rather than punt to a future cleanup task.",
+      "dependencies": [],
+      "comments": [],
+      "closeReason": "Implemented; 9 unit tests; review FAIL→fix→re-verified (order-of-ops + AC #5 test gap fixed)"
+    },
+    {
+      "id": "FORGE-5.3",
+      "title": "run.ts: precondition JSON — planningArtifactsDirty + suggestedPhase + diagnostic",
+      "status": "closed",
+      "priority": 1,
+      "labels": [
+        "complexity:5",
+        "phase:3"
+      ],
+      "description": "WHAT: Extend the precondition JSON output of forge run to include three new fields: planningArtifactsDirty (boolean — are plans/<feature>/plan.md or tasks.json dirty in git?), suggestedPhase (number | null — from nextOpenPhase), and suggestedPhaseDiagnostic (string | null — from nextOpenPhase). Also handle the explicit-flag override: when --epic is supplied, suggestedPhase is null and suggestedPhaseDiagnostic is the literal string '--epic supplied explicitly; phase auto-detect skipped'. The skill layer (FORGE-5.4) consumes these fields to drive its commit + dispatch logic.",
+      "design": "HOW: Modify src/commands/run.ts (depends on FORGE-5.1 for nextOpenPhase, FORGE-5.2 for parsed --epic flag and post-mutex args).\n\nBy the time control reaches this code, FORGE-5.2 has already enforced the mutex and the no-flag/no-feature exits — so the input states reduce to four cases:\n  (a) --epic alone, no feature\n  (b) --epic + feature\n  (c) --phase + feature\n  (d) feature alone\n\nField rules:\n1) suggestedPhase + suggestedPhaseDiagnostic:\n   - cases (a) and (b) — --epic supplied → emit { suggestedPhase: null, suggestedPhaseDiagnostic: '--epic supplied explicitly; phase auto-detect skipped' } unconditionally.\n   - cases (c) and (d) — feature present, no --epic → call nextOpenPhase(feature) and emit { suggestedPhase: result.phase, suggestedPhaseDiagnostic: result.diagnostic } verbatim. (The skill layer chooses --phase over suggestedPhase when both exist; the CLI still emits suggestedPhase for transparency.)\n\n2) planningArtifactsDirty:\n   - case (a) — no feature → emit false (no path scope).\n   - cases (b), (c), (d) — feature present → run git status --porcelain -- plans/<feature>/plan.md plans/<feature>/tasks.json (same Bun.spawn pattern as the existing isGitClean helper at src/commands/run.ts:83-95); non-empty stdout → true; empty → false.\n\nSpread { planningArtifactsDirty, suggestedPhase, suggestedPhaseDiagnostic } into the JSON output object alongside the existing checks. Non-JSON print path: after the existing 'Pipeline steps:' line, print exactly two additional lines — 'Planning:  <dirty|clean>' and 'Phase:     <N> (suggested)' or 'Phase:     none — <suggestedPhaseDiagnostic>' when suggestedPhase is null. Do not change exit codes.\n\n**Test seam for git subprocess and cwd threading.** The repo currently has zero tests that invoke real `git` — there are eleven fixture sites (e.g. src/lib/__tests__/tasks.test.ts:79, 312, 454, 750, …) that fake `.git/` as an empty directory, against which `git status --porcelain` errors and the catch in isGitClean swallows into `false`. The existing isGitClean at src/commands/run.ts:83 also does not pass an explicit cwd to Bun.spawn, so it inherits process.cwd() — that's safe enough for production but breaks any test that wants to point at a tmpDir without process.chdir() (which is process-wide and unsafe under parallel Bun tests).\n\n**Pinned approach (option b — injectable runner) — preferred:** factor the dirty-detection into a helper exported from src/commands/run.ts:\n\n  export type GitRunner = (args: string[], cwd: string) => Promise<{ stdout: string }>;\n  export const defaultGitRun: GitRunner = async (args, cwd) => { /* Bun.spawn with explicit cwd */ };\n  export async function detectDirtyPlanningArtifacts(\n    feature: string,\n    cwd: string,\n    run: GitRunner = defaultGitRun,\n  ): Promise<boolean>;\n\nThe helper invokes `git status --porcelain -- plans/<feature>/plan.md plans/<feature>/tasks.json` via the runner and returns true iff stdout is non-empty. Tests pass a stub runner that returns canned stdout for each scenario (clean / dirty plan / dirty tasks / dirty-unrelated-but-out-of-scope) — no real git needed. The production caller in run() passes the default runner with `cwd = process.cwd()`. This both avoids the eleven-fixture-site precedent of fake .git/ AND threads cwd cleanly through the production path. The same shape can later refactor isGitClean if desired (out of scope for FORGE-5.3).\n\n**Fallback (option a — real git init fixture):** only if option (b) hits a constraint that surfaces during implementation. Real git in tests would introduce silent dependence on git in PATH, GIT_* env, and a global git config user.email for any commit step — none of which the existing test suite assumes.\n\nTests must cover at minimum: clean repo, dirty plan.md only, dirty tasks.json only, dirty unrelated file (must remain false), feature directory missing entirely (must remain false). The helper is exported and tested directly, in addition to whatever integration coverage the run.test.ts suite layers on top.",
+      "acceptance": [
+        "forge run <feature> --json output object contains keys: planningArtifactsDirty (boolean), suggestedPhase (number | null), suggestedPhaseDiagnostic (string | null).",
+        "forge run --epic SK-5 --json (no feature) → suggestedPhase is null and suggestedPhaseDiagnostic is exactly '--epic supplied explicitly; phase auto-detect skipped'.",
+        "JSON shape for case (a) — `--epic` alone, no feature — is exactly: { status, feature: null, epic: '<id>', phase: null, planningArtifactsDirty: false, suggestedPhase: null, suggestedPhaseDiagnostic: '--epic supplied explicitly; phase auto-detect skipped' }. The existing 'checks' and 'steps' fields are omitted in this short-form output (consistent with 5.2's feature-scoped-block skip).",
+        "forge run <feature> --epic SK-5 --json (with feature) → same as above (--epic short-circuits the auto-detect).",
+        "forge run <feature> --json (no flags, with phase:N labels present) → suggestedPhase matches nextOpenPhase(feature).phase; suggestedPhaseDiagnostic matches that result's diagnostic.",
+        "When plans/<feature>/plan.md or plans/<feature>/tasks.json appears in git status --porcelain → planningArtifactsDirty is true; clean tree → false.",
+        "Without a feature positional (--epic alone), planningArtifactsDirty is false (no path scope available).",
+        "Co-located tests extend src/commands/__tests__/run.test.ts to cover: clean repo / dirty plan / dirty tasks.json / dirty unrelated file (still false), --epic skip-auto-detect path, feature-only auto-detect path delegating to nextOpenPhase.",
+        "When --json is supplied, the new 'Planning:' and 'Phase:' info lines MUST NOT print (suppressed by the existing `if (json) ... else ...` branch in run.ts); the JSON object is the only stdout output.",
+        "When the feature directory `plans/<feature>/` does not exist, planningArtifactsDirty is false (no path scope) and suggestedPhaseDiagnostic is the literal string 'no tasks.json found for feature' — passed through verbatim from FORGE-5.1's nextOpenPhase result; FORGE-5.3 does not override the diagnostic.",
+        "pnpm test passes; pnpm typecheck passes."
+      ],
+      "notes": "Files: src/commands/run.ts (modify), src/commands/__tests__/run.test.ts (extend). Depends on FORGE-5.1 (imports nextOpenPhase) and FORGE-5.2 (reads parsed --epic flag and post-mutex args).",
+      "dependencies": [
+        "FORGE-5.1",
+        "FORGE-5.2"
+      ],
+      "comments": [],
+      "closeReason": "Implemented; helper exported with injectable runner; 11 new tests (6 helper-direct, 5 integration); all FORGE-5.3 ACs covered"
+    },
+    {
+      "id": "FORGE-5.4",
+      "title": "skill: plugin/commands/run.md — consume new precondition JSON",
+      "status": "closed",
+      "priority": 2,
+      "labels": [
+        "complexity:4",
+        "phase:3"
+      ],
+      "description": "WHAT: Update the /forge:run skill to consume FORGE-5.2/5.3's new precondition JSON fields. Before starting the task loop, if planningArtifactsDirty is true, stage and commit plans/<feature>/plan.md and plans/<feature>/tasks.json using the COMMIT_PLAN_TEMPLATE from src/lib/tasks/types.ts. For phase selection, honor explicit --epic; else explicit --phase; else suggestedPhase. If none resolves to a number, stop and surface suggestedPhaseDiagnostic to the user.",
+      "design": "HOW: Modify plugin/commands/run.md. Document the consumption flow as part of the skill's procedural steps (the skill is a markdown spec read by the agent, not executed code). Sections to add or update: (1) After 'Read the JSON output' step, document the three new fields — planningArtifactsDirty, suggestedPhase, suggestedPhaseDiagnostic — and what each means; (2) Add an 'If planningArtifactsDirty: commit planning artifacts' step that runs: git add plans/<feature>/plan.md plans/<feature>/tasks.json && git commit -m \"chore(<feature>): add Phase <N> plan + tasks\". The COMMIT_PLAN_TEMPLATE constant in types.ts uses placeholders <feature> and <N> — substitute the feature name and the resolved phase number; (3) Add a phase-resolution decision: prefer --epic if supplied (skip phase resolution), else --phase, else suggestedPhase, else stop and print suggestedPhaseDiagnostic verbatim. Use grep-friendly literal strings in the markdown so future tests can verify presence (the plan acceptance for Phase 5 uses the same pattern). Keep the existing branch-management and dispatch sections intact.",
+      "acceptance": [
+        "plugin/commands/run.md names the literal JSON keys it reads from the precondition output: epic, phase, suggestedPhase, suggestedPhaseDiagnostic, planningArtifactsDirty (each must appear verbatim in the markdown so reviewers can grep).",
+        "plugin/commands/run.md contains the literal substring 'planningArtifactsDirty' and explains the commit step that fires when it is true.",
+        "plugin/commands/run.md references COMMIT_PLAN_TEMPLATE by constant name AND shows a worked substitution example. The grep test asserts the literal substring 'COMMIT_PLAN_TEMPLATE' is present so the contract is anchored to the constant; the worked example currently resolves to 'chore(<feature>): add Phase <N> plan + tasks' (the live value of the constant in src/lib/tasks/types.ts), and the test cross-checks the example against the constant's current value at test time so wording polish in run.md does not silently drift from types.ts.",
+        "plugin/commands/run.md describes the phase-resolution priority as four explicit branches: (1) if epic is non-null, dispatch with --epic and skip phase resolution; (2) else if phase is non-null (the explicit --phase value), use that exact integer for the task loop and any 'phase N' commit substitution; (3) else if suggestedPhase is non-null, use that; (4) else stop and print suggestedPhaseDiagnostic verbatim.",
+        "When --epic alone is supplied (no feature positional, no resolvable <N>), the skill MUST NOT attempt to commit planning artifacts. The CLI emits planningArtifactsDirty: false in that case (per FORGE-5.3), so the commit step is skipped naturally; plugin/commands/run.md should call this out explicitly so the agent does not fabricate a <feature>/<N> substitution.",
+        "Manual QA (recorded in PR body, not a CI gate): run /forge:run cli-iteration-mode on a throwaway branch with a deliberately dirty plans/cli-iteration-mode/plan.md; confirm the skill produces the expected commit before starting the task loop. The PR description for the FORGE-5.4 (or phase-close-out) PR must include the manual-QA outcome — the author of that PR is responsible for capturing it.",
+        "No CLI source changes in this task — markdown only.",
+        "pnpm test passes; pnpm typecheck passes (sanity — no code changes expected)."
+      ],
+      "notes": "Files: plugin/commands/run.md (modify only). Depends on FORGE-5.2 (--epic/--phase flags exist) and FORGE-5.3 (JSON fields are emitted). No code changes — this is a skill-spec update consumed by the agent at /forge:run runtime. | Merge order: 5.4 must not land before BOTH 5.2 AND 5.3 are merged on main — the skill markdown will reference JSON keys (suggestedPhase, suggestedPhaseDiagnostic, planningArtifactsDirty) that do not exist until 5.3 ships. The DAG dependencies enforce this in the local tooling; reviewers should also gate the GitHub PR merge order accordingly.",
+      "dependencies": [
+        "FORGE-5.2",
+        "FORGE-5.3"
+      ],
+      "comments": [],
+      "closeReason": "Skill markdown updated; 5 grep tests verify literal substrings + COMMIT_PLAN_TEMPLATE cross-check. Manual QA: dirty-detection behavior verified via helper-direct tests (real /forge:run invocation requires rebuilt forge binary)."
     }
   ]
 }

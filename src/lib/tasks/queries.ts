@@ -5,7 +5,7 @@
 import { join } from "path";
 import { resolveRepoRoot } from "../worktree";
 import type { EpicInfo, ReadyTask, Task, TaskStatus } from "./types";
-import { TASKS_FILENAME } from "./types";
+import { PHASE_LABEL_PREFIX, TASKS_FILENAME } from "./types";
 import { discoverTaskFilesFromRoot, readTasksFile, validateFeatureName } from "./io";
 
 /**
@@ -235,4 +235,84 @@ export function getDescendants(
 
   matches.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
   return matches;
+}
+
+/**
+ * Auto-detect the lowest phase number with open work for a feature.
+ *
+ * Scans tasks in plans/<feature>/tasks.json that carry a label of the form
+ * `${PHASE_LABEL_PREFIX}${N}` (with N a parseable integer). For each phase N
+ * (ascending):
+ *   - If any task is `in_progress` → halt with a diagnostic instructing the
+ *     caller to resume explicitly via `--phase N`.
+ *   - Else if any task is `open` → return that phase.
+ *   - Else continue.
+ *
+ * Returns:
+ *   - `{ phase: N, diagnostic: null }` when phase N has open work and no
+ *     in_progress tasks.
+ *   - `{ phase: null, diagnostic: <halt-message> }` when the lowest
+ *     non-closed phase has in_progress tasks.
+ *   - `{ phase: null, diagnostic: 'all phases closed for this feature' }`
+ *     when every phase task is closed (or the feature has zero tasks).
+ *   - `{ phase: null, diagnostic: 'no tasks.json found for feature' }`
+ *     when the feature directory / tasks.json is missing — distinct from
+ *     exhaustion so callers can disambiguate.
+ *
+ * Tasks with no `phase:*` label are ignored entirely. A task carrying
+ * multiple `phase:N` labels participates in each phase's set independently.
+ *
+ * Label parsing: values are parsed via `parseInt(N, 10)`. Unparseable or
+ * empty values (e.g., `phase:`, `phase:abc`) are discarded. `phase:01` → 1.
+ */
+export function nextOpenPhase(
+  feature: string,
+  cwd?: string,
+): { phase: number | null; diagnostic: string | null } {
+  validateFeatureName(feature);
+  const root = resolveRepoRoot(cwd);
+  const filePath = join(root, "plans", feature, TASKS_FILENAME);
+  const file = readTasksFile(filePath);
+
+  if (!file) {
+    return { phase: null, diagnostic: "no tasks.json found for feature" };
+  }
+
+  // For each phase number, collect statuses of tasks bearing that label.
+  // A task with multiple phase:N labels participates in each set.
+  const phaseStatuses = new Map<number, TaskStatus[]>();
+
+  for (const task of file.tasks) {
+    for (const label of task.labels) {
+      if (!label.startsWith(PHASE_LABEL_PREFIX)) continue;
+      const value = label.slice(PHASE_LABEL_PREFIX.length);
+      if (value.length === 0) continue;
+      const parsed = parseInt(value, 10);
+      if (Number.isNaN(parsed)) continue;
+      const list = phaseStatuses.get(parsed);
+      if (list) {
+        list.push(task.status);
+      } else {
+        phaseStatuses.set(parsed, [task.status]);
+      }
+    }
+  }
+
+  const phases = Array.from(phaseStatuses.keys()).sort((a, b) => a - b);
+
+  for (const n of phases) {
+    const statuses = phaseStatuses.get(n)!;
+    if (statuses.some((s) => s === "in_progress")) {
+      return {
+        phase: null,
+        diagnostic: `phase ${n} has in-progress tasks — resume explicitly via --phase ${n} or close them first`,
+      };
+    }
+    if (statuses.some((s) => s === "open")) {
+      return { phase: n, diagnostic: null };
+    }
+    // else: all closed → continue
+  }
+
+  return { phase: null, diagnostic: "all phases closed for this feature" };
 }

@@ -1,25 +1,184 @@
 /**
- * forge run <feature>
+ * forge run [<feature>]
  *
  * Validate preconditions for automated execution.
  * Checks: PRD exists, forge.json configured, git clean.
  * Reports what needs to happen (plan, tasks, or execute).
  * The agent handles the actual orchestration.
+ *
+ * FORGE-5.2: also supports --epic <id> and --phase <N> flags.
+ *  - Mutually exclusive (exit 2).
+ *  - --epic alone is sufficient (no feature positional required).
+ *  - --phase still requires a feature positional.
  */
 
 import { existsSync } from "fs";
 import { join } from "path";
-import { queryFeatureTasks, readProjectPrefix } from "../lib/tasks";
+import {
+  queryFeatureTasks,
+  readProjectPrefix,
+  nextOpenPhase,
+  validateFeatureName,
+} from "../lib/tasks";
+
+/**
+ * Pluggable git runner — kept narrow on purpose so tests can inject a stub
+ * without spinning up a real git fixture. Production wiring uses {@link defaultGitRun}.
+ */
+export type GitRunner = (args: string[], cwd: string) => Promise<{ stdout: string }>;
+
+export const defaultGitRun: GitRunner = async (args, cwd) => {
+  try {
+    const proc = Bun.spawn(["git", ...args], { cwd, stdout: "pipe", stderr: "pipe" });
+    const stdout = await new Response(proc.stdout).text();
+    await proc.exited;
+    return { stdout };
+  } catch {
+    return { stdout: "" };
+  }
+};
+
+/**
+ * Detect whether plans/<feature>/plan.md or plans/<feature>/tasks.json have
+ * uncommitted changes. Uses `git status --porcelain` scoped to those two paths,
+ * so unrelated dirty files (or a missing feature directory) yield `false`.
+ */
+export async function detectDirtyPlanningArtifacts(
+  feature: string,
+  cwd: string,
+  run: GitRunner = defaultGitRun,
+): Promise<boolean> {
+  const planPath = join("plans", feature, "plan.md");
+  const tasksPath = join("plans", feature, "tasks.json");
+  const { stdout } = await run(
+    ["status", "--porcelain", "--", planPath, tasksPath],
+    cwd,
+  );
+  return stdout.trim().length > 0;
+}
+
+const EPIC_SKIP_DIAGNOSTIC = "--epic supplied explicitly; phase auto-detect skipped";
+
+interface ParsedArgs {
+  feature: string | undefined;
+  epicFlag: string | null;
+  phaseFlag: string | null;
+  json: boolean;
+}
+
+/**
+ * Walk args once, splitting into positional values, boolean flags, and
+ * value-flag pairs for --epic and --phase. The first non-empty positional
+ * is treated as the feature.
+ */
+function parseRunArgs(args: string[]): ParsedArgs {
+  const valueFlags = new Set(["--epic", "--phase"]);
+  const positionals: string[] = [];
+  let epicFlag: string | null = null;
+  let phaseFlag: string | null = null;
+  let json = false;
+
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a === "--json") {
+      json = true;
+      continue;
+    }
+    if (valueFlags.has(a)) {
+      const next = args[i + 1];
+      if (a === "--epic") epicFlag = next ?? null;
+      else if (a === "--phase") phaseFlag = next ?? null;
+      i++; // consume value
+      continue;
+    }
+    if (a.startsWith("-")) {
+      // unknown boolean flag — ignore, do not treat as positional
+      continue;
+    }
+    positionals.push(a);
+  }
+
+  // Empty-string positional is treated as no-feature.
+  const feature = positionals.find((p) => p.length > 0);
+  return { feature, epicFlag, phaseFlag, json };
+}
 
 export async function run(args: string[]): Promise<void> {
-  const json = args.includes("--json");
-  const feature = args.find((a) => !a.startsWith("-"));
+  const { feature, epicFlag, phaseFlag, json } = parseRunArgs(args);
 
+  // Reject empty values explicitly — almost always a shell-scripting typo,
+  // and silent normalization to null would mask the bug.
+  if (epicFlag === "") {
+    console.error("--epic requires a non-empty value");
+    process.exit(1);
+  }
+  if (phaseFlag === "") {
+    console.error("--phase requires a non-empty value");
+    process.exit(1);
+  }
+
+  // Mutex check (after empty-value rejection so '--epic "" --phase 1'
+  // surfaces the more specific empty-value error).
+  if (epicFlag !== null && phaseFlag !== null) {
+    console.error("--epic and --phase are mutually exclusive");
+    process.exit(2);
+  }
+
+  // Relax the no-feature guard before numeric validation, so
+  // 'forge run --phase abc' (no feature) reports the more specific
+  // '--phase requires a feature positional' message rather than the
+  // generic integer-validation error.
   if (!feature) {
+    if (epicFlag) {
+      // --epic alone path (case a): skip feature-scoped precondition checks.
+      // phaseFlag is guaranteed null here (mutex eliminated the both-set case;
+      // empty-string was rejected above).
+      const payload = {
+        status: "ready",
+        feature: null,
+        epic: epicFlag,
+        phase: null,
+        planningArtifactsDirty: false,
+        suggestedPhase: null,
+        suggestedPhaseDiagnostic: EPIC_SKIP_DIAGNOSTIC,
+      };
+      if (json) {
+        console.log(JSON.stringify(payload));
+      } else {
+        console.log(`Epic:     ${epicFlag}`);
+        console.log(`Planning: ${payload.planningArtifactsDirty ? "dirty" : "clean"}`);
+        console.log(`Phase:    none — ${payload.suggestedPhaseDiagnostic}`);
+      }
+      return;
+    }
+    if (phaseFlag) {
+      console.error("--phase requires a feature positional");
+      process.exit(1);
+    }
     console.error("Usage: forge run <feature-name>");
     process.exit(1);
   }
 
+  // Defense-in-depth: reject path-traversal sequences in the feature
+  // positional before any path joins (existsSync, detectDirtyPlanningArtifacts).
+  try {
+    validateFeatureName(feature);
+  } catch (e) {
+    console.error((e as Error).message);
+    process.exit(1);
+  }
+
+  // Validate --phase as a positive integer in decimal notation.
+  // Number()-based validation accepted "", " 5 ", "5e2", "0x10", "-1"; the
+  // regex locks the contract to plain positive integers.
+  if (phaseFlag !== null) {
+    if (!/^[1-9]\d*$/.test(phaseFlag)) {
+      console.error(`--phase requires a positive integer (got '${phaseFlag}')`);
+      process.exit(1);
+    }
+  }
+
+  // Feature-scoped path: feature is defined here.
   const cwd = process.cwd();
   const prdFile = join(cwd, "plans", feature, "prd.md");
   const planFile = join(cwd, "plans", feature, "plan.md");
@@ -68,15 +227,50 @@ export async function run(args: string[]): Promise<void> {
   steps.push("execute");
   steps.push("docs");
 
+  const phaseValue = phaseFlag !== null ? Number(phaseFlag) : null;
+
+  // Compute Phase 3 fields. --epic short-circuits the auto-detect.
+  const planningArtifactsDirty = await detectDirtyPlanningArtifacts(feature, cwd);
+  let suggestedPhase: number | null;
+  let suggestedPhaseDiagnostic: string | null;
+  if (epicFlag) {
+    suggestedPhase = null;
+    suggestedPhaseDiagnostic = EPIC_SKIP_DIAGNOSTIC;
+  } else {
+    const result = nextOpenPhase(feature, cwd);
+    suggestedPhase = result.phase;
+    suggestedPhaseDiagnostic = result.diagnostic;
+  }
+
   if (json) {
-    console.log(JSON.stringify({ status: "ready", feature, checks, steps }));
+    console.log(
+      JSON.stringify({
+        status: "ready",
+        feature,
+        epic: epicFlag ?? null,
+        phase: phaseValue,
+        checks,
+        steps,
+        planningArtifactsDirty,
+        suggestedPhase,
+        suggestedPhaseDiagnostic,
+      }),
+    );
   } else {
     console.log(`Feature: ${feature}`);
     console.log(`PRD:     plans/${feature}/prd.md`);
     if (checks.hasPlan) console.log(`Plan:    plans/${feature}/plan.md`);
     if (checks.hasEpic) console.log(`Epic:    ${checks.epicId}`);
+    if (epicFlag) console.log(`--epic:  ${epicFlag}`);
+    if (phaseValue !== null) console.log(`--phase: ${phaseValue}`);
     console.log(`Git:     ${checks.gitClean ? "clean" : "dirty (will stash)"}`);
     console.log(`\nPipeline steps: ${steps.join(" → ")}`);
+    console.log(`Planning: ${planningArtifactsDirty ? "dirty" : "clean"}`);
+    if (suggestedPhase !== null) {
+      console.log(`Phase:    ${suggestedPhase} (suggested)`);
+    } else {
+      console.log(`Phase:    none — ${suggestedPhaseDiagnostic}`);
+    }
   }
 }
 
