@@ -20,6 +20,7 @@ import {
   addComment,
   addLabel,
   deleteTask,
+  clearGate,
   validateDag,
   discoverTaskFiles,
   getReadyTasks,
@@ -44,7 +45,7 @@ import {
 const RESERVED = [
   "ready", "list", "show", "create", "close", "update",
   "comment", "label", "dep", "validate", "epic", "delete",
-  "edit",
+  "edit", "gate",
 ];
 
 const VALID_STATUSES: TaskStatus[] = ["open", "in_progress", "closed"];
@@ -82,6 +83,7 @@ Subcommands:
   comment <task-id> "message"               Add a comment to a task
   label <task-id> <label>                   Add a label to a task
   dep add|remove <blocked> <blocker>        Manage task dependencies
+  gate clear <task-id>                      Clear human-gate label from a task
   validate [feature|--project]              Validate DAG integrity
   <feature>                                 Scaffold or show tasks.json status
 
@@ -310,6 +312,26 @@ Options:
   --help, -h      Show this help
 `.trim(),
 
+  gate: `
+forge tasks gate — manage human-gate labels on tasks
+
+Usage: forge tasks gate clear <task-id>
+
+Arguments:
+  task-id         The task whose gate:human label should be cleared
+
+Behavior:
+  - 'clear' removes the gate:human label from the task. Idempotent:
+    a second invocation with the label already absent is a no-op
+    (exit 0, no diff in tasks.json).
+  - On unknown task-id, exits non-zero with the standard
+    'Task "<id>" not found in any tasks.json file.' message.
+  - Silent on success (no stdout output, exit 0).
+
+Options:
+  --help, -h      Show this help
+`.trim(),
+
   validate: `
 forge tasks validate — check DAG integrity
 
@@ -415,6 +437,7 @@ async function tasksInner(args: string[], json: boolean, project: boolean): Prom
       case "ready": return handleReady(args, positional, json, cwd);
       case "delete": return handleDelete(positional, args, json, cwd);
       case "edit": return handleEdit(args, positional, json, cwd);
+      case "gate": return handleGate(positional, cwd);
       default:
         fail(`Subcommand "${subcommand}" is not yet implemented.`);
     }
@@ -754,6 +777,29 @@ async function handleLabel(positional: string[], json: boolean, cwd: string): Pr
     await addLabel(id, label, cwd);
     if (json) console.log(JSON.stringify({ status: "labeled", id, label }));
     else console.log(`Added label "${label}" to ${id}`);
+  } catch (err) {
+    fail((err as Error).message);
+  }
+}
+
+// ── Gate handler (FORGE-7.3) ────────────────────────────
+
+async function handleGate(positional: string[], cwd: string): Promise<void> {
+  // Positional indexing mirrors handleDep: positional[0] is the subcommand
+  // ("gate"), positional[1] is the action, positional[2] is the task-id.
+  const action = positional[1];
+  const taskId = positional[2];
+
+  if (action !== "clear") {
+    fail(`Unknown gate subcommand: ${action ?? "(none)"}. Available: clear. Usage: forge tasks gate clear <task-id>`);
+  }
+
+  if (!taskId) fail("Usage: forge tasks gate clear <task-id>");
+
+  try {
+    // clearGate's not-found error surfaces verbatim (mirrors handleClose).
+    // On success: silent exit 0 — no JSON envelope on this subcommand.
+    await clearGate(taskId, cwd);
   } catch (err) {
     fail((err as Error).message);
   }
