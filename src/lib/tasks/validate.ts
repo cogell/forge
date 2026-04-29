@@ -18,6 +18,8 @@ export function validateDag(scope: ValidateScope, cwd?: string): ValidationResul
   const root = resolveRepoRoot(cwd);
   const allFiles = discoverTaskFilesFromRoot(root);
   const errors: ValidationError[] = [];
+  const warnings: ValidationError[] = [];
+  const info: ValidationError[] = [];
 
   // Determine which files to validate vs which are context-only
   let targetFiles: string[];
@@ -26,8 +28,8 @@ export function validateDag(scope: ValidateScope, cwd?: string): ValidationResul
       const projectPath = join(root, "plans", TASKS_FILENAME);
       targetFiles = allFiles.filter((f) => f === projectPath);
       if (targetFiles.length === 0) {
-        errors.push({ type: "orphan-dep", message: "No project-level tasks.json found at plans/tasks.json", ids: [] });
-        return { valid: false, errors };
+        errors.push({ type: "orphan-dep", severity: "error", message: "No project-level tasks.json found at plans/tasks.json", ids: [] });
+        return { valid: false, errors, warnings, info };
       }
       break;
     }
@@ -35,8 +37,8 @@ export function validateDag(scope: ValidateScope, cwd?: string): ValidationResul
       const featurePath = join(root, "plans", scope.name, TASKS_FILENAME);
       targetFiles = allFiles.filter((f) => f === featurePath);
       if (targetFiles.length === 0) {
-        errors.push({ type: "orphan-dep", message: `No tasks.json found for feature "${scope.name}"`, ids: [] });
-        return { valid: false, errors };
+        errors.push({ type: "orphan-dep", severity: "error", message: `No tasks.json found for feature "${scope.name}"`, ids: [] });
+        return { valid: false, errors, warnings, info };
       }
       break;
     }
@@ -45,14 +47,46 @@ export function validateDag(scope: ValidateScope, cwd?: string): ValidationResul
       break;
   }
 
-  // Load all files for cross-file resolution
+  // Load files for cross-file resolution. Two passes:
+  //   Pass 1 — target files: load errors surface as type-conformance + abort.
+  //   Pass 2 — non-target files: load errors swallowed (those files are
+  //            context-only; if malformed, the user runs validate against them).
   const allTasks: Task[] = [];
   const allEpics: Epic[] = [];
   const fileEpicsMap = new Map<string, Set<string>>();
   const fileTasksMap = new Map<string, Task[]>();
+  const targetSet = new Set(targetFiles);
 
+  // Pass 1: target files
+  for (const filePath of targetFiles) {
+    let data;
+    try {
+      data = readTasksFile(filePath);
+    } catch (caught) {
+      errors.push({
+        type: "type-conformance",
+        severity: "error",
+        message: caught instanceof Error ? caught.message : String(caught),
+        ids: [],
+      });
+      return { valid: false, errors, warnings, info };
+    }
+    if (!data) continue;
+    allTasks.push(...data.tasks);
+    allEpics.push(...data.epics);
+    fileEpicsMap.set(filePath, new Set(data.epics.map((e) => e.id)));
+    fileTasksMap.set(filePath, data.tasks);
+  }
+
+  // Pass 2: non-target files (silent on error)
   for (const filePath of allFiles) {
-    const data = readTasksFile(filePath);
+    if (targetSet.has(filePath)) continue;
+    let data;
+    try {
+      data = readTasksFile(filePath);
+    } catch {
+      continue;
+    }
     if (!data) continue;
     allTasks.push(...data.tasks);
     allEpics.push(...data.epics);
@@ -73,7 +107,7 @@ export function validateDag(scope: ValidateScope, cwd?: string): ValidationResul
   const allIds = [...allTasks.map((t) => t.id), ...allEpics.map((e) => e.id)];
   for (const id of allIds) {
     if (seenIds.has(id)) {
-      errors.push({ type: "duplicate-id", message: `Duplicate ID: ${id}`, ids: [id] });
+      errors.push({ type: "duplicate-id", severity: "error", message: `Duplicate ID: ${id}`, ids: [id] });
     }
     seenIds.add(id);
   }
@@ -82,7 +116,7 @@ export function validateDag(scope: ValidateScope, cwd?: string): ValidationResul
   for (const task of targetTasks) {
     for (const depId of task.dependencies) {
       if (!taskIdSet.has(depId)) {
-        errors.push({ type: "orphan-dep", message: `Task ${task.id} depends on non-existent ${depId}`, ids: [task.id, depId] });
+        errors.push({ type: "orphan-dep", severity: "error", message: `Task ${task.id} depends on non-existent ${depId}`, ids: [task.id, depId] });
       }
     }
   }
@@ -99,7 +133,7 @@ export function validateDag(scope: ValidateScope, cwd?: string): ValidationResul
       const prefix = task.id.substring(0, dashIdx);
       const epicId = `${prefix}-${epicNum}`;
       if (!fileEpicIds.has(epicId)) {
-        errors.push({ type: "orphan-epic", message: `Task ${task.id} references non-existent epic ${epicId}`, ids: [task.id, epicId] });
+        errors.push({ type: "orphan-epic", severity: "error", message: `Task ${task.id} references non-existent epic ${epicId}`, ids: [task.id, epicId] });
       }
     }
   }
@@ -135,7 +169,7 @@ export function validateDag(scope: ValidateScope, cwd?: string): ValidationResul
         const key = normalizeCycle(cycle);
         if (!reportedCycles.has(key)) {
           reportedCycles.add(key);
-          errors.push({ type: "cycle", message: `Cycle detected: ${cycle.join(" → ")} → ${depId}`, ids: cycle });
+          errors.push({ type: "cycle", severity: "error", message: `Cycle detected: ${cycle.join(" → ")} → ${depId}`, ids: cycle });
         }
       } else if (color.get(depId) === WHITE) {
         dfs(depId, path);
@@ -152,5 +186,5 @@ export function validateDag(scope: ValidateScope, cwd?: string): ValidationResul
     }
   }
 
-  return { valid: errors.length === 0, errors };
+  return { valid: errors.length === 0, errors, warnings, info };
 }

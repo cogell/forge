@@ -75,7 +75,15 @@ export interface ReadyTask {
 }
 
 export interface ValidationError {
-  type: "cycle" | "orphan-dep" | "orphan-epic" | "duplicate-id";
+  type:
+    | "cycle"
+    | "orphan-dep"
+    | "orphan-epic"
+    | "duplicate-id"
+    | "type-conformance"
+    | "empty-acceptance"
+    | "orphan-label";
+  severity: "error" | "warning" | "info";
   message: string;
   ids: string[];
 }
@@ -83,6 +91,8 @@ export interface ValidationError {
 export interface ValidationResult {
   valid: boolean;
   errors: ValidationError[];
+  warnings: ValidationError[];
+  info: ValidationError[];
 }
 
 export type ValidateScope =

@@ -1847,6 +1847,97 @@ describe("validateDag", () => {
   });
 });
 
+// ─── validateDag — FORGE-6.2: severity + warnings/info + type-conformance ──
+
+describe("validateDag — structured result (FORGE-6.2)", () => {
+  let tmpDir: string;
+  beforeEach(() => { tmpDir = makeTmpDir(); setupProject(tmpDir, "FORGE"); });
+  afterEach(() => { rmSync(tmpDir, { recursive: true, force: true }); });
+
+  it("result shape always includes warnings: [] and info: [] arrays even when empty", () => {
+    setupFeature(tmpDir, "auth", { version: 1, epics: [{ id: "FORGE-1", title: "Auth", created: "2026-03-30" }], tasks: [] });
+    const result = validateDag({ kind: "feature", name: "auth" }, tmpDir);
+    expect(result.warnings).toEqual([]);
+    expect(result.info).toEqual([]);
+  });
+
+  it("existing four rules push entries with severity: 'error'", () => {
+    // Cycle rule (covers severity assertion for the cycle path)
+    setupFeature(tmpDir, "auth", { version: 1, epics: [{ id: "FORGE-1", title: "Auth", created: "2026-03-30" }], tasks: [
+      { id: "FORGE-1.1", title: "A", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: ["FORGE-1.2"], comments: [], closeReason: null },
+      { id: "FORGE-1.2", title: "B", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: ["FORGE-1.1"], comments: [], closeReason: null },
+    ] });
+    const result = validateDag({ kind: "feature", name: "auth" }, tmpDir);
+    expect(result.errors.length).toBeGreaterThan(0);
+    expect(result.errors.every((e) => e.severity === "error")).toBe(true);
+  });
+
+  it("early-exit (target file missing) carries severity: 'error' and full result shape", () => {
+    const result = validateDag({ kind: "feature", name: "nonexistent" }, tmpDir);
+    expect(result.valid).toBe(false);
+    expect(result.errors[0].severity).toBe("error");
+    expect(result.warnings).toEqual([]);
+    expect(result.info).toEqual([]);
+  });
+
+  it("malformed target file → type-conformance error and early return", () => {
+    // Write a malformed tasks.json (acceptance must be string[] but is "a string")
+    const featureDir = join(tmpDir, "plans", "auth");
+    mkdirSync(featureDir, { recursive: true });
+    writeFileSync(join(featureDir, "tasks.json"), JSON.stringify({
+      version: 1,
+      epics: [{ id: "FORGE-1", title: "Auth", created: "2026-03-30" }],
+      tasks: [{
+        id: "FORGE-1.1", title: "T", status: "open", priority: 2, labels: [],
+        description: "", design: "", acceptance: "a string", notes: "",
+        dependencies: [], comments: [], closeReason: null,
+      }],
+    }));
+    const result = validateDag({ kind: "feature", name: "auth" }, tmpDir);
+    expect(result.valid).toBe(false);
+    expect(result.errors).toHaveLength(1); // early-return — no other rules ran
+    expect(result.errors[0].type).toBe("type-conformance");
+    expect(result.errors[0].severity).toBe("error");
+    expect(result.errors[0].message).toContain("acceptance");
+    expect(result.errors[0].message).toContain("forge tasks update");
+    expect(result.warnings).toEqual([]);
+    expect(result.info).toEqual([]);
+  });
+
+  it("malformed non-target file → silently skipped, target validation continues", () => {
+    // Target file: well-formed, but has a cycle (so we expect cycle error to surface).
+    setupFeature(tmpDir, "auth", { version: 1, epics: [{ id: "FORGE-1", title: "Auth", created: "2026-03-30" }], tasks: [
+      { id: "FORGE-1.1", title: "A", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: ["FORGE-1.2"], comments: [], closeReason: null },
+      { id: "FORGE-1.2", title: "B", status: "open", priority: 2, labels: [], description: "", design: "", acceptance: [], notes: "", dependencies: ["FORGE-1.1"], comments: [], closeReason: null },
+    ] });
+    // Non-target file: malformed (priority should be number, not string).
+    const otherDir = join(tmpDir, "plans", "other");
+    mkdirSync(otherDir, { recursive: true });
+    writeFileSync(join(otherDir, "tasks.json"), JSON.stringify({
+      version: 1,
+      epics: [{ id: "FORGE-2", title: "Other", created: "2026-03-30" }],
+      tasks: [{
+        id: "FORGE-2.1", title: "B", status: "open", priority: "high", labels: [],
+        description: "", design: "", acceptance: [], notes: "",
+        dependencies: [], comments: [], closeReason: null,
+      }],
+    }));
+    const result = validateDag({ kind: "feature", name: "auth" }, tmpDir);
+    expect(result.errors.some((e) => e.type === "type-conformance")).toBe(false); // malformed file NOT surfaced
+    expect(result.errors.some((e) => e.type === "cycle")).toBe(true); // target's cycle still caught
+  });
+
+  it("final return uses literal-key order { valid, errors, warnings, info } (deterministic JSON)", () => {
+    setupFeature(tmpDir, "auth", { version: 1, epics: [{ id: "FORGE-1", title: "Auth", created: "2026-03-30" }], tasks: [] });
+    const result = validateDag({ kind: "feature", name: "auth" }, tmpDir);
+    const json = JSON.stringify(result);
+    // Insertion-order asserts: valid before errors before warnings before info.
+    expect(json).toMatch(/^\{"valid":[^"]+"errors":\[\]/);
+    const keys = Object.keys(result);
+    expect(keys).toEqual(["valid", "errors", "warnings", "info"]);
+  });
+});
+
 // ─── Auto-close cascade (grandparent) ───────────────────────────────
 
 describe("auto-close cascade", () => {

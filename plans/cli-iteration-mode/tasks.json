@@ -471,7 +471,7 @@
     {
       "id": "FORGE-6.1",
       "title": "io.ts: extend readTasksFile structural check + RECOVERY_HINT constant",
-      "status": "in_progress",
+      "status": "closed",
       "priority": 1,
       "labels": [
         "complexity:5",
@@ -494,12 +494,12 @@
       "notes": "Files: src/lib/tasks/types.ts (add RECOVERY_HINT constant), src/lib/tasks/io.ts (extend readTasksFile per-task loop + append RECOVERY_HINT to all 7 existing throws), src/lib/tasks/index.ts (re-export RECOVERY_HINT), src/lib/__tests__/tasks.test.ts (add positive + negative test per field, per-site regression tests, update existing throw-site assertions to expect the appended hint). Foundation task — FORGE-6.2 invokes the same load function and expects it to throw on shape mismatches. | RECOVERY_HINT mentions both `forge tasks edit` (preferred ergonomics) AND `forge tasks update` (the plan-locked substring) — Phase 2 shipped `edit`, so both are valid recovery paths and the constant captures both for users.",
       "dependencies": [],
       "comments": [],
-      "closeReason": null
+      "closeReason": "Implemented; 25 new tests covering all 10 fields + 7 throw-site regressions + version + zero-data; review PASS."
     },
     {
       "id": "FORGE-6.2",
       "title": "validate.ts: structured ValidationResult (severity-aware) + type-conformance rule",
-      "status": "open",
+      "status": "in_progress",
       "priority": 1,
       "labels": [
         "complexity:5",
