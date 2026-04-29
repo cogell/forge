@@ -5,7 +5,7 @@
 import { join } from "path";
 import { resolveRepoRoot } from "../worktree";
 import type { EpicInfo, ReadyTask, Task, TaskStatus } from "./types";
-import { PHASE_LABEL_PREFIX, TASKS_FILENAME } from "./types";
+import { GATE_LABEL_HUMAN, PHASE_LABEL_PREFIX, TASKS_FILENAME } from "./types";
 import { discoverTaskFilesFromRoot, readTasksFile, validateFeatureName } from "./io";
 
 /**
@@ -184,6 +184,7 @@ export function getReadyTasks(
       title: task.title,
       priority: task.priority,
       labels: task.labels,
+      gated: task.labels.includes(GATE_LABEL_HUMAN),
     });
   }
 

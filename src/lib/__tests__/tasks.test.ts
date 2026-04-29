@@ -287,6 +287,7 @@ describe("type definitions", () => {
       title: "Do something",
       priority: 1,
       labels: ["backend"],
+      gated: false,
     };
     expect(task.id).toBe("T-001");
     expect(task.labels).toContain("backend");
@@ -685,6 +686,7 @@ describe("getReadyTasks", () => {
       title: "My Task",
       priority: 3,
       labels: ["backend", "complexity:5"],
+      gated: false,
     });
   });
 
@@ -3048,6 +3050,101 @@ describe("getReadyTasks label filter", () => {
     const result = getReadyTasks(tmpDir, "alpha", { labels: ["gate:human"] });
     expect(result).toHaveLength(1);
     expect(result[0].id).toBe("alpha-1.1");
+  });
+});
+
+// ─── getReadyTasks gated flag (FORGE-7.1) ────────────────────────────
+
+describe("getReadyTasks gated flag", () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = makeTmpDir();
+    mkdirSync(join(tmpDir, ".git"), { recursive: true });
+  });
+
+  afterEach(() => {
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("gated=false when task has no labels", () => {
+    const data = makeTasksFile(
+      [{ id: "feat-1", title: "Phase 1", created: "2026-03-30" }],
+      [makeTask({ id: "feat-1.1", title: "A", status: "open", labels: [] })],
+    );
+    writePlansDir(tmpDir, { "my-feature": data });
+
+    const result = getReadyTasks(tmpDir);
+    expect(result).toHaveLength(1);
+    expect(result[0].gated).toBe(false);
+  });
+
+  it("gated=true when task has only gate:human label", () => {
+    const data = makeTasksFile(
+      [{ id: "feat-1", title: "Phase 1", created: "2026-03-30" }],
+      [makeTask({ id: "feat-1.1", title: "A", status: "open", labels: ["gate:human"] })],
+    );
+    writePlansDir(tmpDir, { "my-feature": data });
+
+    const result = getReadyTasks(tmpDir);
+    expect(result).toHaveLength(1);
+    expect(result[0].gated).toBe(true);
+  });
+
+  it("gated=true when task has gate:human alongside other labels", () => {
+    const data = makeTasksFile(
+      [{ id: "feat-1", title: "Phase 1", created: "2026-03-30" }],
+      [
+        makeTask({
+          id: "feat-1.1",
+          title: "A",
+          status: "open",
+          labels: ["frontend", "gate:human", "phase:5"],
+        }),
+      ],
+    );
+    writePlansDir(tmpDir, { "my-feature": data });
+
+    const result = getReadyTasks(tmpDir);
+    expect(result).toHaveLength(1);
+    expect(result[0].gated).toBe(true);
+  });
+
+  it("gated=false when task has only non-gate labels", () => {
+    const data = makeTasksFile(
+      [{ id: "feat-1", title: "Phase 1", created: "2026-03-30" }],
+      [
+        makeTask({
+          id: "feat-1.1",
+          title: "A",
+          status: "open",
+          labels: ["frontend", "needs-design", "phase:5"],
+        }),
+      ],
+    );
+    writePlansDir(tmpDir, { "my-feature": data });
+
+    const result = getReadyTasks(tmpDir);
+    expect(result).toHaveLength(1);
+    expect(result[0].gated).toBe(false);
+  });
+
+  it("--label gate:human filter returns only gated=true tasks (AC2 composes)", () => {
+    const data = makeTasksFile(
+      [{ id: "feat-1", title: "Phase 1", created: "2026-03-30" }],
+      [
+        makeTask({ id: "feat-1.1", title: "Gated", status: "open", labels: ["gate:human"] }),
+        makeTask({ id: "feat-1.2", title: "Plain", status: "open", labels: ["backend"] }),
+        makeTask({ id: "feat-1.3", title: "Mixed", status: "open", labels: ["gate:human", "frontend"] }),
+      ],
+    );
+    writePlansDir(tmpDir, { "my-feature": data });
+
+    const result = getReadyTasks(tmpDir, undefined, { labels: ["gate:human"] });
+    expect(result).toHaveLength(2);
+    for (const t of result) {
+      expect(t.gated).toBe(true);
+    }
   });
 });
 

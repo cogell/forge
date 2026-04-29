@@ -72,6 +72,7 @@ export interface ReadyTask {
   title: string;
   priority: number;
   labels: string[];
+  gated: boolean;
 }
 
 export interface ValidationError {

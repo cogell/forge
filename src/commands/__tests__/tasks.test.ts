@@ -1261,6 +1261,25 @@ describe("forge tasks CLI", () => {
     expect(logs).toContain("No ready tasks");
   });
 
+  it("ready --json output includes gated:boolean on every element (FORGE-7.1)", async () => {
+    setupFeature(tmp, "auth", readyFixture());
+    await tasks(["ready", "--json"]);
+
+    const output = logSpy.mock.calls[0][0];
+    const parsed = JSON.parse(output);
+    expect(parsed.length).toBeGreaterThan(0);
+    for (const t of parsed) {
+      expect(typeof t.gated).toBe("boolean");
+    }
+    // The fixture has TEST-1.1 with "gate:human" → gated=true, others → gated=false.
+    const byId = Object.fromEntries(parsed.map((t: any) => [t.id, t]));
+    expect(byId["TEST-1.1"].gated).toBe(true);
+    expect(byId["TEST-1.2"].gated).toBe(false);
+    expect(byId["TEST-1.3"].gated).toBe(false);
+    expect(byId["TEST-1.4"].gated).toBe(false);
+    expect(byId["TEST-1.5"].gated).toBe(false);
+  });
+
   // ── show --children / --full recursion (FORGE-3.5) ─────────────
 
   function childrenFixture(): TasksFile {
