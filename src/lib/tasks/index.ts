@@ -46,6 +46,7 @@ export {
   updateTask,
   addComment,
   addLabel,
+  clearGate,
   deleteTask,
   ConcurrentWriteError,
   type DeletePreview,
