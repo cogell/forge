@@ -255,6 +255,10 @@ export function getDescendants(
  *     non-closed phase has in_progress tasks.
  *   - `{ phase: null, diagnostic: 'all phases closed for this feature' }`
  *     when every phase task is closed (or the feature has zero tasks).
+ *   - `{ phase: null, diagnostic: 'no phase labels found ...' }` when tasks
+ *     exist but none carry a parseable `phase:N` label — typically a
+ *     malformed-labels symptom (e.g. one task with `["complexity:3,phase:1"]`
+ *     instead of two separate labels).
  *   - `{ phase: null, diagnostic: 'no tasks.json found for feature' }`
  *     when the feature directory / tasks.json is missing — distinct from
  *     exhaustion so callers can disambiguate.
@@ -299,6 +303,15 @@ export function nextOpenPhase(
   }
 
   const phases = Array.from(phaseStatuses.keys()).sort((a, b) => a - b);
+
+  if (phases.length === 0 && file.tasks.length > 0) {
+    return {
+      phase: null,
+      diagnostic:
+        `no phase labels found on any of ${file.tasks.length} task(s) — check tasks.json label format ` +
+        `(use separate -l flags: -l "phase:1" -l "complexity:3", not -l "phase:1,complexity:3")`,
+    };
+  }
 
   for (const n of phases) {
     const statuses = phaseStatuses.get(n)!;

@@ -1067,6 +1067,26 @@ describe("nextOpenPhase", () => {
     expect(result).toEqual({ phase: null, diagnostic: "all phases closed for this feature" });
   });
 
+  it("tasks exist but no parseable phase label → 'no phase labels found' diagnostic distinct from 'all phases closed'", () => {
+    // Repro for the CSV-label bug: an agent passed `-l "complexity:3,phase:1"` (one
+    // flag, comma in value) which the CLI stores as the single label
+    // "complexity:3,phase:1". `phase:` prefix matching fails on it.
+    const data = makeTasksFile(
+      [{ id: "FORGE-1", title: "Epic", created: "2026-04-28" }],
+      [
+        makeTask({ id: "FORGE-1.1", title: "Malformed", status: "open", labels: ["complexity:3,phase:1"] }),
+        makeTask({ id: "FORGE-1.2", title: "Unlabelled", status: "open", labels: [] }),
+      ],
+    );
+    writePlansDir(tmpDir, { "my-feature": data });
+
+    const result = nextOpenPhase("my-feature", tmpDir);
+    expect(result.phase).toBeNull();
+    expect(result.diagnostic).toContain("no phase labels found");
+    expect(result.diagnostic).toContain("2 task(s)");
+    expect(result.diagnostic).not.toContain("all phases closed");
+  });
+
   it("uses PHASE_LABEL_PREFIX constant (not hardcoded 'phase:') in implementation", () => {
     // Read the implementation source and assert it references PHASE_LABEL_PREFIX.
     // This locks the contract from the spec's acceptance criterion #9.

@@ -31,7 +31,7 @@ Read the plan phase. For each acceptance criterion or logical unit of work, crea
 forge tasks create "Task title" \
   -p <0-4> \
   --parent <epic-id> \
-  -l "complexity:<1-10>,phase:N" \
+  -l "complexity:<1-10>" -l "phase:N" \
   -d "WHAT: 2-4 sentence problem statement" \
   --design "HOW: types, interfaces, file paths, pseudo-code" \
   --acceptance "- [ ] First criterion
@@ -82,7 +82,7 @@ Tasks scoring 7+ become mini-epics with children:
 ```bash
 forge tasks create "Sub-task title" -p 1 \
   --parent FORGE-a3f8.3 \
-  -l "complexity:3,phase:N" \
+  -l "complexity:3" -l "phase:N" \
   --design "..." --acceptance "..."
 # Creates FORGE-a3f8.3.1
 ```
